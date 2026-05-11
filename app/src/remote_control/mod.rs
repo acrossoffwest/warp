@@ -3,12 +3,15 @@ mod service;
 
 pub use server::{socket_address_path, start, RemoteControlServerHandle};
 pub use service::{
-    RemoteControlRequest, RemoteControlResponse, RemoteControlService, SplitDirection,
+    PaneCommandStatus, RemoteControlAgent, RemoteControlRequest, RemoteControlResponse,
+    RemoteControlService, RemotePaneInfo, SendCommandMode, SplitDirection,
 };
 
+use async_channel::Sender;
 use async_trait::async_trait;
 use ipc::ServiceImpl;
 use service::{RemoteControlRequest as Req, RemoteControlResponse as Resp};
+use std::collections::HashMap;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 /// Singleton model that keeps the remote-control IPC server alive for the
@@ -17,54 +20,35 @@ pub struct RemoteControlHost {
     _server: ipc::Server,
     /// Keep the stream alive so it doesn't cancel.
     _drain: warpui::r#async::SpawnedLocalStream,
+    remote_panes: HashMap<String, RemotePaneBinding>,
 }
 
 impl RemoteControlHost {
     pub(crate) fn new(
         server: ipc::Server,
-        action_rx: async_channel::Receiver<PendingAction>,
+        job_rx: async_channel::Receiver<RemoteControlJob>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        use crate::workspace::{Workspace, WorkspaceAction};
-        use warpui::{SingletonEntity as _, TypedActionView as _};
-
         let drain = ctx.spawn_stream_local(
-            action_rx,
-            move |_this, action, ctx| {
-                let workspace_action = match action {
-                    PendingAction::SplitActiveAndRun { command, direction } => {
-                        WorkspaceAction::RemoteControlSplitAndRun { command, direction }
-                    }
+            job_rx,
+            move |_this, job, _ctx| {
+                let response = match job.request {
+                    Req::Ping => Resp::Pong,
+                    _ => Resp::Error {
+                        message: "remote pane management not implemented yet".to_owned(),
+                    },
                 };
-                // External callers often make Warp inactive before the action is
-                // drained, so fall back to the last frontmost window, then any
-                // remaining window.
-                use warpui::windowing::WindowManager;
-                let windows = WindowManager::as_ref(ctx);
-                let target_window = windows
-                    .active_window()
-                    .or_else(|| windows.frontmost_window_id())
-                    .or_else(|| ctx.window_ids().next());
-
-                if let Some(workspace) = target_window
-                    .and_then(|window_id| ctx.views_of_type::<Workspace>(window_id))
-                    .and_then(|workspaces| workspaces.into_iter().next())
-                {
-                    workspace.update(ctx, |ws, ctx| {
-                        ws.handle_action(&workspace_action, ctx);
-                    });
-                } else {
-                    log::warn!("remote_control: no workspace available for action");
-                }
+                let _ = job.response_tx.try_send(response);
             },
             |_, _| {
-                log::info!("remote_control: action stream closed");
+                log::info!("remote_control: job stream closed");
             },
         );
 
         Self {
             _server: server,
             _drain: drain,
+            remote_panes: HashMap::new(),
         }
     }
 }
@@ -77,15 +61,19 @@ impl SingletonEntity for RemoteControlHost {}
 
 #[derive(Clone)]
 pub(crate) struct RemoteControlServiceImpl {
-    pub(crate) action_tx: async_channel::Sender<PendingAction>,
+    pub(crate) job_tx: async_channel::Sender<RemoteControlJob>,
 }
 
 #[derive(Debug)]
-pub(crate) enum PendingAction {
-    SplitActiveAndRun {
-        command: String,
-        direction: SplitDirection,
-    },
+pub(crate) struct RemoteControlJob {
+    pub(crate) request: Req,
+    pub(crate) response_tx: Sender<Resp>,
+}
+
+#[derive(Clone, Debug)]
+struct RemotePaneBinding {
+    pane_id: crate::pane_group::PaneId,
+    label: Option<String>,
 }
 
 #[async_trait]
@@ -93,19 +81,21 @@ impl ServiceImpl for RemoteControlServiceImpl {
     type Service = RemoteControlService;
 
     async fn handle_request(&self, request: Req) -> Resp {
-        match request {
-            Req::Ping => Resp::Pong,
-            Req::SplitActivePaneAndRun { command, direction } => {
-                match self
-                    .action_tx
-                    .try_send(PendingAction::SplitActiveAndRun { command, direction })
-                {
-                    Ok(()) => Resp::Ok,
-                    Err(e) => Resp::Error {
-                        message: format!("dispatch failed: {e}"),
-                    },
-                }
-            }
+        if matches!(request, Req::Ping) {
+            return Resp::Pong;
+        }
+
+        let (response_tx, response_rx) = async_channel::bounded(1);
+        match self.job_tx.try_send(RemoteControlJob {
+            request,
+            response_tx,
+        }) {
+            Ok(()) => response_rx.recv().await.unwrap_or_else(|e| Resp::Error {
+                message: format!("remote control response failed: {e}"),
+            }),
+            Err(e) => Resp::Error {
+                message: format!("dispatch failed: {e}"),
+            },
         }
     }
 }

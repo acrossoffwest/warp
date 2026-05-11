@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use ipc::ServerBuilder;
 use warpui::r#async::executor::Background;
 
-use super::{PendingAction, RemoteControlServiceImpl};
+use super::{RemoteControlJob, RemoteControlServiceImpl};
 
 /// Returns the absolute path where the IPC connection address is published.
 ///
@@ -19,12 +19,12 @@ pub fn socket_address_path() -> Result<PathBuf> {
 
 pub struct RemoteControlServerHandle {
     pub(crate) server: ipc::Server,
-    pub(crate) action_rx: async_channel::Receiver<PendingAction>,
+    pub(crate) job_rx: async_channel::Receiver<RemoteControlJob>,
 }
 
 pub fn start(background_executor: Arc<Background>) -> Result<RemoteControlServerHandle> {
-    let (tx, rx) = async_channel::unbounded::<PendingAction>();
-    let service_impl = RemoteControlServiceImpl { action_tx: tx };
+    let (job_tx, job_rx) = async_channel::unbounded::<RemoteControlJob>();
+    let service_impl = RemoteControlServiceImpl { job_tx };
 
     let (server, connection_address) = ServerBuilder::default()
         .with_service(service_impl)
@@ -41,8 +41,7 @@ pub fn start(background_executor: Arc<Background>) -> Result<RemoteControlServer
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Err(e) =
-            std::fs::set_permissions(&addr_file, std::fs::Permissions::from_mode(0o600))
+        if let Err(e) = std::fs::set_permissions(&addr_file, std::fs::Permissions::from_mode(0o600))
         {
             log::warn!(
                 "remote_control: could not set 0600 on {}: {e}",
@@ -52,8 +51,5 @@ pub fn start(background_executor: Arc<Background>) -> Result<RemoteControlServer
     }
 
     log::info!("remote_control IPC ready at {}", addr_file.display());
-    Ok(RemoteControlServerHandle {
-        server,
-        action_rx: rx,
-    })
+    Ok(RemoteControlServerHandle { server, job_rx })
 }

@@ -1361,17 +1361,20 @@ pub(crate) fn initialize_app(
 
     // Start the remote-control IPC server for the GUI app (not CLI / daemon).
     // The server handle is kept alive by the RemoteControlHost singleton model.
-    // Action dispatch is a placeholder (TODO: task 5 will add WorkspaceAction).
-    if matches!(launch_mode, LaunchMode::App { .. } | LaunchMode::Test { .. }) {
+    // Job dispatch is a placeholder until remote pane management is implemented.
+    if matches!(
+        launch_mode,
+        LaunchMode::App { .. } | LaunchMode::Test { .. }
+    ) {
         match remote_control::start(ctx.background_executor().clone()) {
             Ok(handle) => {
-                let action_rx = handle.action_rx;
+                let job_rx = handle.job_rx;
                 let server = handle.server;
 
-                // The singleton model owns the IPC server and drains the action
+                // The singleton model owns the IPC server and drains the job
                 // stream on the main thread via spawn_stream_local.
                 ctx.add_singleton_model(move |ctx| {
-                    remote_control::RemoteControlHost::new(server, action_rx, ctx)
+                    remote_control::RemoteControlHost::new(server, job_rx, ctx)
                 });
             }
             Err(e) => {
