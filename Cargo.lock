@@ -14870,6 +14870,7 @@ dependencies = [
  "dirs 6.0.0",
  "interprocess",
  "serde",
+ "serde_json",
  "uuid",
 ]
 

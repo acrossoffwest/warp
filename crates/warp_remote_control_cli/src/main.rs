@@ -9,7 +9,9 @@ use interprocess::local_socket::LocalSocketStream;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use protocol::{RemoteControlRequest, RemoteControlResponse, SplitDirection, SERVICE_ID};
+use protocol::{
+    RemoteControlRequest, RemoteControlResponse, SendCommandMode, SplitDirection, SERVICE_ID,
+};
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -26,14 +28,34 @@ struct Cli {
 enum Cmd {
     /// Send a Ping to the running Warp and print 'pong' on success.
     Ping,
-    /// Split the focused Warp pane and run a shell command in the new pane.
-    Split {
-        /// Command to execute in the new pane (raw shell input).
-        #[arg(long)]
-        command: String,
+    /// List visible panes in the active Warp pane group.
+    ListPanes,
+    /// Split the focused Warp pane and print the new remote pane ID as JSON.
+    SplitPane {
         /// Direction to split.
         #[arg(long, value_enum)]
         direction: DirectionArg,
+        /// Optional label to associate with the returned remote pane ID.
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Send a command to a previously listed or split remote pane.
+    SendCommandToPane {
+        /// Remote pane ID returned by list-panes or split-pane.
+        #[arg(long)]
+        pane_id: String,
+        /// Command/input to send.
+        #[arg(long)]
+        command: String,
+        /// Send mode.
+        #[arg(long, value_enum, default_value_t = SendModeArg::Shell)]
+        mode: SendModeArg,
+    },
+    /// Close a previously listed or split remote pane.
+    ClosePane {
+        /// Remote pane ID returned by list-panes or split-pane.
+        #[arg(long)]
+        pane_id: String,
     },
 }
 
@@ -52,6 +74,21 @@ impl From<DirectionArg> for SplitDirection {
             DirectionArg::Down => SplitDirection::Down,
             DirectionArg::Left => SplitDirection::Left,
             DirectionArg::Up => SplitDirection::Up,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SendModeArg {
+    Shell,
+    Pty,
+}
+
+impl From<SendModeArg> for SendCommandMode {
+    fn from(mode: SendModeArg) -> Self {
+        match mode {
+            SendModeArg::Shell => SendCommandMode::Shell,
+            SendModeArg::Pty => SendCommandMode::Pty,
         }
     }
 }
@@ -184,9 +221,22 @@ fn run() -> Result<()> {
     // Build the request for the chosen subcommand.
     let rpc_request = match &cli.command {
         Cmd::Ping => RemoteControlRequest::Ping,
-        Cmd::Split { command, direction } => RemoteControlRequest::SplitActivePaneAndRun {
-            command: command.clone(),
+        Cmd::ListPanes => RemoteControlRequest::ListPanes,
+        Cmd::SplitPane { direction, label } => RemoteControlRequest::SplitPane {
             direction: (*direction).into(),
+            label: label.clone(),
+        },
+        Cmd::SendCommandToPane {
+            pane_id,
+            command,
+            mode,
+        } => RemoteControlRequest::SendCommandToPane {
+            pane_id: pane_id.clone(),
+            command: command.clone(),
+            mode: (*mode).into(),
+        },
+        Cmd::ClosePane { pane_id } => RemoteControlRequest::ClosePane {
+            pane_id: pane_id.clone(),
         },
     };
 
@@ -234,6 +284,14 @@ fn run() -> Result<()> {
             Ok(())
         }
         RemoteControlResponse::Ok => Ok(()),
+        RemoteControlResponse::Panes { panes } => {
+            println!("{}", serde_json::to_string_pretty(&panes)?);
+            Ok(())
+        }
+        RemoteControlResponse::PaneCreated { pane_id } => {
+            println!("{}", serde_json::json!({ "pane_id": pane_id }));
+            Ok(())
+        }
         RemoteControlResponse::Error { message } => {
             eprintln!("{message}");
             std::process::exit(1);
