@@ -3,7 +3,7 @@
 //! These are duplicated rather than imported from the `warp` crate because the
 //! `warp` crate is the entire Warp application library and pulling it as a
 //! dependency would make this CLI build the whole app. The bincode wire format
-//! is structural — as long as variant order, field names, and types match
+//! is structural — as long as variant order, field order, and field types match
 //! the source of truth, the bytes will round-trip. Re-derive carefully when
 //! changing the source.
 //!
@@ -28,6 +28,11 @@ pub enum SendCommandMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RemoteControlRequest {
+    SplitActivePaneAndRun {
+        command: String,
+        direction: SplitDirection,
+    },
+    Ping,
     ListPanes,
     SplitPane {
         direction: SplitDirection,
@@ -41,7 +46,6 @@ pub enum RemoteControlRequest {
     ClosePane {
         pane_id: String,
     },
-    Ping,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -75,9 +79,9 @@ pub struct RemotePaneInfo {
 pub enum RemoteControlResponse {
     Ok,
     Pong,
+    Error { message: String },
     Panes { panes: Vec<RemotePaneInfo> },
     PaneCreated { pane_id: String },
-    Error { message: String },
 }
 
 /// The service ID as registered by the Warp server.

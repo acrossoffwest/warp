@@ -17,6 +17,11 @@ pub enum SendCommandMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RemoteControlRequest {
+    SplitActivePaneAndRun {
+        command: String,
+        direction: SplitDirection,
+    },
+    Ping,
     ListPanes,
     SplitPane {
         direction: SplitDirection,
@@ -30,7 +35,6 @@ pub enum RemoteControlRequest {
     ClosePane {
         pane_id: String,
     },
-    Ping,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,9 +68,9 @@ pub struct RemotePaneInfo {
 pub enum RemoteControlResponse {
     Ok,
     Pong,
+    Error { message: String },
     Panes { panes: Vec<RemotePaneInfo> },
     PaneCreated { pane_id: String },
-    Error { message: String },
 }
 
 pub struct RemoteControlService {}
