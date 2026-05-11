@@ -1363,7 +1363,7 @@ pub(crate) fn initialize_app(
     // The server handle is kept alive by the RemoteControlHost singleton model.
     // Action dispatch is a placeholder (TODO: task 5 will add WorkspaceAction).
     if matches!(launch_mode, LaunchMode::App { .. } | LaunchMode::Test { .. }) {
-        match remote_control::start(ctx.background_executor()) {
+        match remote_control::start(ctx.background_executor().clone()) {
             Ok(handle) => {
                 let action_rx = handle.action_rx;
                 let server = handle.server;
