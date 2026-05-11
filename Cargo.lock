@@ -6676,6 +6676,7 @@ dependencies = [
  "directories",
  "float-cmp",
  "instant",
+ "ipc",
  "itertools 0.14.0",
  "lazy_static",
  "log",
