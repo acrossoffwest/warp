@@ -1,0 +1,20 @@
+[package]
+name = "warp_remote_control_cli"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "warp-remote-control"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+bincode.workspace = true
+clap = { workspace = true, features = ["derive"] }
+dirs.workspace = true
+ipc.workspace = true
+log.workspace = true
+serde.workspace = true
+warpui.workspace = true
