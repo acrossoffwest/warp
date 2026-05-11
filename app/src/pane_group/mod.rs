@@ -6496,6 +6496,21 @@ impl PaneGroup {
             return Err("target pane is not a terminal pane".to_owned());
         };
 
+        if matches!(mode, SendCommandMode::Shell) {
+            let command_context = terminal.as_ref(ctx).session_command_context(ctx);
+            if matches!(
+                command_context,
+                CommandContext::RunningCommand { .. } | CommandContext::RunningAIBlock { .. }
+            ) {
+                return Err("target pane is currently running a command".to_owned());
+            }
+
+            let input_buffer = terminal.as_ref(ctx).input().as_ref(ctx).buffer_text(ctx);
+            if !input_buffer.is_empty() {
+                return Err("target pane has unsubmitted input".to_owned());
+            }
+        }
+
         terminal.update(ctx, |terminal, ctx| match mode {
             SendCommandMode::Shell => {
                 terminal.execute_command_or_set_pending(&command, ctx);
@@ -6517,6 +6532,26 @@ impl PaneGroup {
     ) -> Result<(), String> {
         if self.terminal_view_from_pane_id(pane_id, ctx).is_none() {
             return Err("target pane is not a terminal pane".to_owned());
+        }
+
+        if let Some(terminal_manager) = self
+            .terminal_session_by_id(pane_id)
+            .map(|session| session.terminal_manager(ctx))
+        {
+            if terminal_manager.read(ctx, |terminal_manager, _ctx| {
+                terminal_manager
+                    .model()
+                    .lock()
+                    .shared_session_status()
+                    .is_sharer()
+            }) {
+                return Err("target pane is sharing an active session".to_owned());
+            }
+        }
+
+        let summary = UnsavedStateSummary::for_pane(self, pane_id, ctx);
+        if summary.should_display_warning(ctx) {
+            return Err("target pane has unsaved state or a running process".to_owned());
         }
 
         self.close_pane(pane_id, ctx);
