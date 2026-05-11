@@ -6389,6 +6389,28 @@ impl PaneGroup {
         );
     }
 
+    /// Splits the currently focused terminal pane in the given direction, spawns a
+    /// new terminal in the new pane, and queues `command` to run in it.
+    /// Called by `Workspace::remote_control_split_and_run`.
+    pub(crate) fn split_focused_and_run(
+        &mut self,
+        direction: Direction,
+        command: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let focused_pane_id = self.focused_pane_id(ctx);
+        let startup_directory = self.startup_path_for_new_session(
+            focused_pane_id.as_terminal_pane_id(),
+            ctx,
+        );
+        let (pane_data, view) =
+            self.create_terminal_pane_data(startup_directory, HashMap::new(), None, None, ctx);
+        view.update(ctx, |terminal_view, ctx| {
+            terminal_view.set_pending_command(command.as_str(), ctx);
+        });
+        let _ = self.add_pane(direction, Some(focused_pane_id), Box::new(pane_data), true, ctx);
+    }
+
     fn init_pane(
         &mut self,
         pane: Box<dyn AnyPaneContent>,

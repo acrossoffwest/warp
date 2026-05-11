@@ -13066,6 +13066,30 @@ impl Workspace {
         });
     }
 
+    /// Splits the focused terminal pane in the active tab in `direction` and
+    /// runs `command` in the new pane.  Called by `WorkspaceAction::RemoteControlSplitAndRun`.
+    fn remote_control_split_and_run(
+        &mut self,
+        command: String,
+        direction: crate::remote_control::SplitDirection,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::pane_group::Direction as PGDirection;
+        use crate::remote_control::SplitDirection;
+
+        let pg_direction = match direction {
+            SplitDirection::Right => PGDirection::Right,
+            SplitDirection::Left => PGDirection::Left,
+            SplitDirection::Up => PGDirection::Up,
+            SplitDirection::Down => PGDirection::Down,
+        };
+
+        let active_pane_group = self.active_tab_pane_group().clone();
+        active_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.split_focused_and_run(pg_direction, command, ctx);
+        });
+    }
+
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn show_handoff_prepare_failed_toast(window_id: WindowId, ctx: &mut ViewContext<Self>) {
         WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -22387,6 +22411,9 @@ impl TypedActionView for Workspace {
             }
             SyncTrafficLights => {
                 self.sync_window_button_visibility(ctx);
+            }
+            RemoteControlSplitAndRun { command, direction } => {
+                self.remote_control_split_and_run(command.clone(), *direction, ctx);
             }
         };
         if action.should_save_app_state_on_action() {
