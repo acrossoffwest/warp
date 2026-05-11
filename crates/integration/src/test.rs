@@ -18,6 +18,7 @@ mod notebooks;
 mod pane_restoration;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
+mod remote_control;
 mod remote_server;
 mod rules;
 mod secrets;
@@ -52,6 +53,7 @@ pub use notebooks::*;
 pub use pane_restoration::*;
 #[cfg(target_os = "macos")]
 pub use preview_config_migration::*;
+pub use remote_control::*;
 pub use remote_server::*;
 pub use rules::*;
 pub use secrets::*;
