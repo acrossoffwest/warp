@@ -31,9 +31,12 @@ impl RemoteControlHost {
     ) -> Self {
         let drain = ctx.spawn_stream_local(
             job_rx,
-            move |_this, job, _ctx| {
+            move |_this, job, ctx| {
                 let response = match job.request {
                     Req::Ping => Resp::Pong,
+                    Req::SplitActivePaneAndRun { command, direction } => {
+                        Self::dispatch_split_active_pane_and_run(command, direction, ctx)
+                    }
                     _ => Resp::Error {
                         message: "remote pane management not implemented yet".to_owned(),
                     },
@@ -49,6 +52,40 @@ impl RemoteControlHost {
             _server: server,
             _drain: drain,
             remote_panes: HashMap::new(),
+        }
+    }
+
+    fn dispatch_split_active_pane_and_run(
+        command: String,
+        direction: SplitDirection,
+        ctx: &mut ModelContext<Self>,
+    ) -> Resp {
+        use crate::workspace::{Workspace, WorkspaceAction};
+        use warpui::{windowing::WindowManager, TypedActionView};
+
+        let workspace_action = WorkspaceAction::RemoteControlSplitAndRun { command, direction };
+
+        // External callers often make Warp inactive before the job is drained,
+        // so fall back to the last frontmost window, then any remaining window.
+        let windows = WindowManager::as_ref(ctx);
+        let target_window = windows
+            .active_window()
+            .or_else(|| windows.frontmost_window_id())
+            .or_else(|| ctx.window_ids().next());
+
+        if let Some(workspace) = target_window
+            .and_then(|window_id| ctx.views_of_type::<Workspace>(window_id))
+            .and_then(|workspaces| workspaces.into_iter().next())
+        {
+            workspace.update(ctx, |ws, ctx| {
+                ws.handle_action(&workspace_action, ctx);
+            });
+            Resp::Ok
+        } else {
+            log::warn!("remote_control: no workspace available for split-and-run request");
+            Resp::Error {
+                message: "no workspace available".to_owned(),
+            }
         }
     }
 }
