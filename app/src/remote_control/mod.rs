@@ -9,6 +9,25 @@ pub use service::{
 use async_trait::async_trait;
 use ipc::ServiceImpl;
 use service::{RemoteControlRequest as Req, RemoteControlResponse as Resp};
+use warpui::{Entity, SingletonEntity};
+
+/// Singleton model that keeps the remote-control IPC server alive for the
+/// lifetime of the application.  Dropping this struct shuts down the server.
+pub struct RemoteControlHost {
+    _server: ipc::Server,
+}
+
+impl RemoteControlHost {
+    pub(crate) fn new(server: ipc::Server) -> Self {
+        Self { _server: server }
+    }
+}
+
+impl Entity for RemoteControlHost {
+    type Event = ();
+}
+
+impl SingletonEntity for RemoteControlHost {}
 
 #[derive(Clone)]
 pub(crate) struct RemoteControlServiceImpl {

@@ -18,7 +18,7 @@ pub fn socket_address_path() -> Result<PathBuf> {
 }
 
 pub struct RemoteControlServerHandle {
-    _server: ipc::Server,
+    pub(crate) server: ipc::Server,
     pub action_rx: mpsc::Receiver<PendingAction>,
 }
 
@@ -53,7 +53,7 @@ pub fn start(background_executor: Arc<Background>) -> Result<RemoteControlServer
 
     log::info!("remote_control IPC ready at {}", addr_file.display());
     Ok(RemoteControlServerHandle {
-        _server: server,
+        server,
         action_rx: rx,
     })
 }
