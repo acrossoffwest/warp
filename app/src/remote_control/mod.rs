@@ -69,13 +69,16 @@ impl RemoteControlHost {
 
     fn remote_id_for_pane(
         &mut self,
+        pane_group_id: warpui::EntityId,
         pane_id: crate::pane_group::PaneId,
         label: Option<String>,
     ) -> String {
         if let Some((id, binding)) = self
             .remote_panes
             .iter_mut()
-            .find(|(_, binding)| binding.pane_id == pane_id)
+            .find(|(_, binding)| {
+                binding.pane_group_id == pane_group_id && binding.pane_id == pane_id
+            })
         {
             if label.is_some() {
                 binding.label = label;
@@ -87,6 +90,7 @@ impl RemoteControlHost {
         self.remote_panes.insert(
             id.clone(),
             RemotePaneBinding {
+                pane_group_id,
                 pane_id,
                 label,
             },
@@ -96,6 +100,17 @@ impl RemoteControlHost {
 
     fn binding_for_remote_id(&self, remote_id: &str) -> Option<RemotePaneBinding> {
         self.remote_panes.get(remote_id).cloned()
+    }
+
+    fn prune_remote_panes_for_active_group(
+        &mut self,
+        active_pane_group_id: warpui::EntityId,
+        visible_pane_ids: &[crate::pane_group::PaneId],
+    ) {
+        self.remote_panes.retain(|_, binding| {
+            binding.pane_group_id != active_pane_group_id
+                || visible_pane_ids.contains(&binding.pane_id)
+        });
     }
 
     fn handle_job_request(&mut self, request: Req, ctx: &mut ModelContext<Self>) -> Resp {
@@ -113,12 +128,14 @@ impl RemoteControlHost {
             }
             Req::ListPanes => workspace.update(ctx, |workspace, ctx| {
                 let active_pane_group = workspace.active_tab_pane_group().clone();
+                let pane_group_id = active_pane_group.id();
                 let panes = active_pane_group.update(ctx, |pane_group, ctx| {
-                    let pane_ids: Vec<_> = pane_group.pane_ids().collect();
+                    let pane_ids = pane_group.visible_pane_ids();
+                    self.prune_remote_panes_for_active_group(pane_group_id, &pane_ids);
                     pane_ids
                         .into_iter()
                         .filter_map(|pane_id| {
-                            let remote_id = self.remote_id_for_pane(pane_id, None);
+                            let remote_id = self.remote_id_for_pane(pane_group_id, pane_id, None);
                             let label = self
                                 .remote_panes
                                 .get(&remote_id)
@@ -130,8 +147,9 @@ impl RemoteControlHost {
                 Resp::Panes { panes }
             }),
             Req::SplitPane { direction, label } => workspace.update(ctx, |workspace, ctx| {
+                let pane_group_id = workspace.active_tab_pane_group().id();
                 let pane_id = workspace.remote_control_split_pane(direction, ctx);
-                let remote_id = self.remote_id_for_pane(pane_id, label);
+                let remote_id = self.remote_id_for_pane(pane_group_id, pane_id, label);
                 Resp::PaneCreated { pane_id: remote_id }
             }),
             Req::SendCommandToPane {
@@ -145,7 +163,19 @@ impl RemoteControlHost {
                     };
                 };
 
-                match workspace.update(ctx, |workspace, ctx| {
+                let response = match workspace.update(ctx, |workspace, ctx| {
+                    let active_pane_group = workspace.active_tab_pane_group().clone();
+                    if active_pane_group.id() != binding.pane_group_id {
+                        return Err("target pane is not in the active pane group".to_owned());
+                    }
+                    if !active_pane_group
+                        .as_ref(ctx)
+                        .visible_pane_ids()
+                        .contains(&binding.pane_id)
+                    {
+                        return Err("target pane is no longer visible".to_owned());
+                    }
+
                     workspace.remote_control_send_command_to_pane(
                         binding.pane_id,
                         command,
@@ -155,7 +185,14 @@ impl RemoteControlHost {
                 }) {
                     Ok(()) => Resp::Ok,
                     Err(message) => Resp::Error { message },
+                };
+                if matches!(
+                    response,
+                    Resp::Error { ref message } if message == "target pane is no longer visible"
+                ) {
+                    self.remote_panes.remove(&pane_id);
                 }
+                response
             }
             Req::ClosePane { pane_id } => {
                 let Some(binding) = self.binding_for_remote_id(&pane_id) else {
@@ -166,13 +203,28 @@ impl RemoteControlHost {
                 };
 
                 match workspace.update(ctx, |workspace, ctx| {
+                    let active_pane_group = workspace.active_tab_pane_group().clone();
+                    if active_pane_group.id() != binding.pane_group_id {
+                        return Err("target pane is not in the active pane group".to_owned());
+                    }
+                    if !active_pane_group
+                        .as_ref(ctx)
+                        .visible_pane_ids()
+                        .contains(&binding.pane_id)
+                    {
+                        return Err("target pane is no longer visible".to_owned());
+                    }
+
                     workspace.remote_control_close_pane(binding.pane_id, ctx)
                 }) {
                     Ok(()) => {
                         self.remote_panes.remove(&pane_id);
                         Resp::Ok
                     }
-                    Err(message) => Resp::Error { message },
+                    Err(message) => {
+                        self.remote_panes.remove(&pane_id);
+                        Resp::Error { message }
+                    }
                 }
             }
         }
@@ -221,6 +273,7 @@ pub(crate) struct RemoteControlJob {
 
 #[derive(Clone, Debug)]
 struct RemotePaneBinding {
+    pane_group_id: warpui::EntityId,
     pane_id: crate::pane_group::PaneId,
     label: Option<String>,
 }
