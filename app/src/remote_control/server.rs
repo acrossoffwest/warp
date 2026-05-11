@@ -41,8 +41,14 @@ pub fn start(background_executor: Arc<Background>) -> Result<RemoteControlServer
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ =
-            std::fs::set_permissions(&addr_file, std::fs::Permissions::from_mode(0o600));
+        if let Err(e) =
+            std::fs::set_permissions(&addr_file, std::fs::Permissions::from_mode(0o600))
+        {
+            log::warn!(
+                "remote_control: could not set 0600 on {}: {e}",
+                addr_file.display()
+            );
+        }
     }
 
     log::info!("remote_control IPC ready at {}", addr_file.display());
