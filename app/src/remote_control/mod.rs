@@ -1,7 +1,7 @@
 mod server;
 mod service;
 
-pub use server::start;
+pub use server::{socket_address_path, start, RemoteControlServerHandle};
 pub use service::{
     RemoteControlRequest, RemoteControlResponse, RemoteControlService, SplitDirection,
 };
