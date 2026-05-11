@@ -16,7 +16,7 @@ pub(crate) struct RemoteControlServiceImpl {
 }
 
 #[derive(Debug)]
-pub enum PendingAction {
+pub(crate) enum PendingAction {
     SplitActiveAndRun {
         command: String,
         direction: SplitDirection,
