@@ -10,11 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 bincode.workspace = true
 clap = { workspace = true, features = ["derive"] }
 dirs.workspace = true
-ipc.workspace = true
-log.workspace = true
+interprocess = "1.2.1"
 serde.workspace = true
-warpui.workspace = true
+uuid.workspace = true

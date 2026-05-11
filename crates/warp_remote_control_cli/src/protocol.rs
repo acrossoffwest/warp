@@ -10,7 +10,6 @@
 //! Source of truth: `app/src/remote_control/service.rs` on branch
 //! `feat/remote-control`.
 
-use ipc::Service;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,8 +36,9 @@ pub enum RemoteControlResponse {
     Error { message: String },
 }
 
-pub struct RemoteControlService {}
-impl Service for RemoteControlService {
-    type Request = RemoteControlRequest;
-    type Response = RemoteControlResponse;
-}
+/// The service ID as registered by the Warp server.
+///
+/// This MUST match `std::any::type_name::<RemoteControlService>()` as evaluated
+/// in the `app` crate, where the struct lives at
+/// `app::remote_control::service::RemoteControlService`.
+pub const SERVICE_ID: &str = "app::remote_control::service::RemoteControlService";
