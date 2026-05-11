@@ -1368,30 +1368,10 @@ pub(crate) fn initialize_app(
                 let action_rx = handle.action_rx;
                 let server = handle.server;
 
-                // Drain the blocking mpsc receiver on a dedicated OS thread.
-                // Task 5 will replace the log body with a real WorkspaceAction dispatch.
-                std::thread::spawn(move || {
-                    while let Ok(action) = action_rx.recv() {
-                        match action {
-                            remote_control::PendingAction::SplitActiveAndRun {
-                                command,
-                                direction,
-                            } => {
-                                // TODO(remote_control task 5): dispatch WorkspaceAction instead.
-                                log::info!(
-                                    "remote_control: received SplitActiveAndRun \
-                                     dir={direction:?} cmd={command:?}"
-                                );
-                            }
-                        }
-                    }
-                    log::info!("remote_control: drain thread exiting (sender dropped)");
-                });
-
-                // Register the server handle as a singleton so it lives until
-                // the app shuts down.
-                ctx.add_singleton_model(move |_ctx| {
-                    remote_control::RemoteControlHost::new(server)
+                // The singleton model owns the IPC server and drains the action
+                // stream on the main thread via spawn_stream_local.
+                ctx.add_singleton_model(move |ctx| {
+                    remote_control::RemoteControlHost::new(server, action_rx, ctx)
                 });
             }
             Err(e) => {

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use ipc::ServerBuilder;
@@ -19,11 +19,11 @@ pub fn socket_address_path() -> Result<PathBuf> {
 
 pub struct RemoteControlServerHandle {
     pub(crate) server: ipc::Server,
-    pub action_rx: mpsc::Receiver<PendingAction>,
+    pub action_rx: async_channel::Receiver<PendingAction>,
 }
 
 pub fn start(background_executor: Arc<Background>) -> Result<RemoteControlServerHandle> {
-    let (tx, rx) = mpsc::sync_channel::<PendingAction>(32);
+    let (tx, rx) = async_channel::unbounded::<PendingAction>();
     let service_impl = RemoteControlServiceImpl { action_tx: tx };
 
     let (server, connection_address) = ServerBuilder::default()
