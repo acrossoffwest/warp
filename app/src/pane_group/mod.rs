@@ -6394,7 +6394,7 @@ impl PaneGroup {
 
     /// Splits the currently focused terminal pane in the given direction, spawns a
     /// new terminal in the new pane, and queues `command` to run in it.
-    /// Called by `Workspace::remote_control_split_and_run`.
+    /// Called by the legacy remote-control split-and-run path.
     fn remote_control_agent_for_command(command: &str) -> Option<RemoteControlAgent> {
         let normalized = command.to_ascii_lowercase();
         if normalized.contains("codex") {

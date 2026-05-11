@@ -13066,28 +13066,54 @@ impl Workspace {
         });
     }
 
-    /// Splits the focused terminal pane in the active tab in `direction` and
-    /// runs `command` in the new pane.  Called by `WorkspaceAction::RemoteControlSplitAndRun`.
-    fn remote_control_split_and_run(
-        &mut self,
-        command: String,
+    fn remote_control_direction(
         direction: crate::remote_control::SplitDirection,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> crate::pane_group::Direction {
         use crate::pane_group::Direction as PGDirection;
         use crate::remote_control::SplitDirection;
 
-        let pg_direction = match direction {
+        match direction {
             SplitDirection::Right => PGDirection::Right,
             SplitDirection::Left => PGDirection::Left,
             SplitDirection::Up => PGDirection::Up,
             SplitDirection::Down => PGDirection::Down,
-        };
+        }
+    }
 
+    pub(crate) fn remote_control_split_pane(
+        &mut self,
+        direction: crate::remote_control::SplitDirection,
+        ctx: &mut ViewContext<Self>,
+    ) -> crate::pane_group::PaneId {
+        let pg_direction = Self::remote_control_direction(direction);
         let active_pane_group = self.active_tab_pane_group().clone();
         active_pane_group.update(ctx, |pane_group, ctx| {
-            pane_group.split_focused_and_run(pg_direction, command, ctx);
-        });
+            pane_group.split_focused_remote(pg_direction, ctx)
+        })
+    }
+
+    pub(crate) fn remote_control_send_command_to_pane(
+        &mut self,
+        pane_id: crate::pane_group::PaneId,
+        command: String,
+        mode: crate::remote_control::SendCommandMode,
+        ctx: &mut ViewContext<Self>,
+    ) -> Result<(), String> {
+        let active_pane_group = self.active_tab_pane_group().clone();
+        active_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.remote_control_send_command_to_pane(pane_id, command, mode, ctx)
+        })
+    }
+
+    pub(crate) fn remote_control_close_pane(
+        &mut self,
+        pane_id: crate::pane_group::PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Result<(), String> {
+        let active_pane_group = self.active_tab_pane_group().clone();
+        active_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.remote_control_close_pane(pane_id, ctx)
+        })
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -22411,9 +22437,6 @@ impl TypedActionView for Workspace {
             }
             SyncTrafficLights => {
                 self.sync_window_button_visibility(ctx);
-            }
-            RemoteControlSplitAndRun { command, direction } => {
-                self.remote_control_split_and_run(command.clone(), *direction, ctx);
             }
         };
         if action.should_save_app_state_on_action() {

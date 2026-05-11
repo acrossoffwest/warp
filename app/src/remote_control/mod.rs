@@ -60,10 +60,9 @@ impl RemoteControlHost {
         direction: SplitDirection,
         ctx: &mut ModelContext<Self>,
     ) -> Resp {
-        use crate::workspace::{Workspace, WorkspaceAction};
-        use warpui::{windowing::WindowManager, TypedActionView};
-
-        let workspace_action = WorkspaceAction::RemoteControlSplitAndRun { command, direction };
+        use crate::remote_control::SendCommandMode;
+        use crate::workspace::Workspace;
+        use warpui::windowing::WindowManager;
 
         // External callers often make Warp inactive before the job is drained,
         // so fall back to the last frontmost window, then any remaining window.
@@ -78,9 +77,17 @@ impl RemoteControlHost {
             .and_then(|workspaces| workspaces.into_iter().next())
         {
             workspace.update(ctx, |ws, ctx| {
-                ws.handle_action(&workspace_action, ctx);
-            });
-            Resp::Ok
+                let pane_id = ws.remote_control_split_pane(direction, ctx);
+                match ws.remote_control_send_command_to_pane(
+                    pane_id,
+                    command,
+                    SendCommandMode::Shell,
+                    ctx,
+                ) {
+                    Ok(()) => Resp::Ok,
+                    Err(message) => Resp::Error { message },
+                }
+            })
         } else {
             log::warn!("remote_control: no workspace available for split-and-run request");
             Resp::Error {

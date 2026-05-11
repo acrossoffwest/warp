@@ -678,12 +678,6 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
-    /// Splits the focused terminal pane in the given direction and runs `command`
-    /// in the new pane.  Triggered by the remote-control IPC server.
-    RemoteControlSplitAndRun {
-        command: String,
-        direction: crate::remote_control::SplitDirection,
-    },
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -985,9 +979,6 @@ impl WorkspaceAction {
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
             #[cfg(target_family = "wasm")]
             OpenLinkOnDesktop(_) => false,
-            // Remote-control actions are programmatic and transient; do not
-            // persist the resulting pane split as a saved workspace state.
-            RemoteControlSplitAndRun { .. } => false,
             // actions that are related to updating user settings or
             // managing some ui elements (like closing/opening modals)
             // that don't reflect on actual workspace and don't need to
