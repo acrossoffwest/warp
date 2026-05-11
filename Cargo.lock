@@ -14861,6 +14861,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_remote_control_cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "clap",
+ "dirs 6.0.0",
+ "interprocess",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "warp_ripgrep"
 version = "0.1.0"
 dependencies = [

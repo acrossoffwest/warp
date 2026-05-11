@@ -40,5 +40,5 @@ pub enum RemoteControlResponse {
 ///
 /// This MUST match `std::any::type_name::<RemoteControlService>()` as evaluated
 /// in the `app` crate, where the struct lives at
-/// `app::remote_control::service::RemoteControlService`.
-pub const SERVICE_ID: &str = "app::remote_control::service::RemoteControlService";
+/// `warp::remote_control::service::RemoteControlService`.
+pub const SERVICE_ID: &str = "warp::remote_control::service::RemoteControlService";
