@@ -6392,9 +6392,6 @@ impl PaneGroup {
         );
     }
 
-    /// Splits the currently focused terminal pane in the given direction, spawns a
-    /// new terminal in the new pane, and queues `command` to run in it.
-    /// Called by the legacy remote-control split-and-run path.
     fn remote_control_agent_for_command(command: &str) -> Option<RemoteControlAgent> {
         let normalized = command.to_ascii_lowercase();
         if normalized.contains("codex") {
@@ -6468,21 +6465,6 @@ impl PaneGroup {
         let new_pane_id = PaneId::from(pane_data.terminal_pane_id());
         let _ = self.add_pane(direction, Some(focused_pane_id), Box::new(pane_data), true, ctx);
         new_pane_id
-    }
-
-    pub(crate) fn split_focused_and_run(
-        &mut self,
-        direction: Direction,
-        command: String,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let new_pane_id = self.split_focused_remote(direction, ctx);
-        let _ = self.remote_control_send_command_to_pane(
-            new_pane_id,
-            command,
-            SendCommandMode::Shell,
-            ctx,
-        );
     }
 
     pub(crate) fn remote_control_send_command_to_pane(
