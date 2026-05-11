@@ -123,11 +123,14 @@ use crate::report_if_error;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
 };
+use crate::remote_control::{
+    PaneCommandStatus, RemoteControlAgent, RemotePaneInfo, SendCommandMode,
+};
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::server::telemetry::{
     AnonymousUserSignupEntrypoint, PaletteSource, SharingDialogSource, TelemetryEvent,
 };
-use crate::session_management::SessionNavigationData;
+use crate::session_management::{CommandContext, SessionNavigationData};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
@@ -6392,23 +6395,132 @@ impl PaneGroup {
     /// Splits the currently focused terminal pane in the given direction, spawns a
     /// new terminal in the new pane, and queues `command` to run in it.
     /// Called by `Workspace::remote_control_split_and_run`.
+    fn remote_control_agent_for_command(command: &str) -> Option<RemoteControlAgent> {
+        let normalized = command.to_ascii_lowercase();
+        if normalized.contains("codex") {
+            Some(RemoteControlAgent::Codex)
+        } else if normalized.contains("claude-code")
+            || normalized.contains("claude code")
+            || normalized.contains("claude")
+        {
+            Some(RemoteControlAgent::ClaudeCode)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn remote_control_pane_info(
+        &self,
+        pane_id: PaneId,
+        remote_pane_id: String,
+        label: Option<String>,
+        ctx: &AppContext,
+    ) -> Option<RemotePaneInfo> {
+        let terminal = self.terminal_view_from_pane_id(pane_id, ctx)?;
+        let command_context = terminal.as_ref(ctx).session_command_context(ctx);
+
+        let (status, command, available_for_command) = match command_context {
+            CommandContext::None => (PaneCommandStatus::Idle, None, true),
+            CommandContext::RunningCommand { running_command } => {
+                (PaneCommandStatus::RunningCommand, Some(running_command), false)
+            }
+            CommandContext::LastRunCommand {
+                last_run_command, ..
+            } => (PaneCommandStatus::LastCommand, Some(last_run_command), true),
+            CommandContext::RunningAIBlock { prompt } => {
+                (PaneCommandStatus::AiBlock, Some(prompt), false)
+            }
+            CommandContext::LastRunAIBlock { prompt } => {
+                (PaneCommandStatus::AiBlock, Some(prompt), true)
+            }
+        };
+
+        let agent = command
+            .as_deref()
+            .and_then(Self::remote_control_agent_for_command);
+        let is_likely_agent_host =
+            agent.is_some() && matches!(status, PaneCommandStatus::RunningCommand);
+
+        Some(RemotePaneInfo {
+            pane_id: remote_pane_id,
+            label,
+            focused: self.focused_pane_id(ctx) == pane_id,
+            available_for_command,
+            status,
+            command,
+            agent,
+            is_likely_agent_host,
+        })
+    }
+
+    pub(crate) fn split_focused_remote(
+        &mut self,
+        direction: Direction,
+        ctx: &mut ViewContext<Self>,
+    ) -> PaneId {
+        let focused_pane_id = self.focused_pane_id(ctx);
+        let startup_directory = self.startup_path_for_new_session(
+            focused_pane_id.as_terminal_pane_id(),
+            ctx,
+        );
+        let (pane_data, _view) =
+            self.create_terminal_pane_data(startup_directory, HashMap::new(), None, None, ctx);
+        let new_pane_id = PaneId::from(pane_data.terminal_pane_id());
+        let _ = self.add_pane(direction, Some(focused_pane_id), Box::new(pane_data), true, ctx);
+        new_pane_id
+    }
+
     pub(crate) fn split_focused_and_run(
         &mut self,
         direction: Direction,
         command: String,
         ctx: &mut ViewContext<Self>,
     ) {
-        let focused_pane_id = self.focused_pane_id(ctx);
-        let startup_directory = self.startup_path_for_new_session(
-            focused_pane_id.as_terminal_pane_id(),
+        let new_pane_id = self.split_focused_remote(direction, ctx);
+        let _ = self.remote_control_send_command_to_pane(
+            new_pane_id,
+            command,
+            SendCommandMode::Shell,
             ctx,
         );
-        let (pane_data, view) =
-            self.create_terminal_pane_data(startup_directory, HashMap::new(), None, None, ctx);
-        view.update(ctx, |terminal_view, ctx| {
-            terminal_view.set_pending_command(command.as_str(), ctx);
+    }
+
+    pub(crate) fn remote_control_send_command_to_pane(
+        &mut self,
+        pane_id: PaneId,
+        command: String,
+        mode: SendCommandMode,
+        ctx: &mut ViewContext<Self>,
+    ) -> Result<(), String> {
+        let Some(terminal) = self.terminal_view_from_pane_id(pane_id, ctx) else {
+            return Err("target pane is not a terminal pane".to_owned());
+        };
+
+        terminal.update(ctx, |terminal, ctx| match mode {
+            SendCommandMode::Shell => {
+                terminal.execute_command_or_set_pending(&command, ctx);
+            }
+            SendCommandMode::Pty => {
+                let mut bytes = command.into_bytes();
+                bytes.push(b'\n');
+                terminal.write_viewer_bytes_to_pty(bytes, ctx);
+            }
         });
-        let _ = self.add_pane(direction, Some(focused_pane_id), Box::new(pane_data), true, ctx);
+
+        Ok(())
+    }
+
+    pub(crate) fn remote_control_close_pane(
+        &mut self,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Result<(), String> {
+        if self.terminal_view_from_pane_id(pane_id, ctx).is_none() {
+            return Err("target pane is not a terminal pane".to_owned());
+        }
+
+        self.close_pane(pane_id, ctx);
+        Ok(())
     }
 
     fn init_pane(
