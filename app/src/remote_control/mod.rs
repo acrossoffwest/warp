@@ -36,16 +36,25 @@ impl RemoteControlHost {
                         WorkspaceAction::RemoteControlSplitAndRun { command, direction }
                     }
                 };
-                // Route to the active workspace window, mirroring dispatch_to_active_workspace.
+                // External callers often make Warp inactive before the action is
+                // drained, so fall back to the last frontmost window, then any
+                // remaining window.
                 use warpui::windowing::WindowManager;
-                if let Some(window_id) = WindowManager::as_ref(ctx).active_window() {
-                    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                        if let Some(workspace) = workspaces.into_iter().next() {
-                            workspace.update(ctx, |ws, ctx| {
-                                ws.handle_action(&workspace_action, ctx);
-                            });
-                        }
-                    }
+                let windows = WindowManager::as_ref(ctx);
+                let target_window = windows
+                    .active_window()
+                    .or_else(|| windows.frontmost_window_id())
+                    .or_else(|| ctx.window_ids().next());
+
+                if let Some(workspace) = target_window
+                    .and_then(|window_id| ctx.views_of_type::<Workspace>(window_id))
+                    .and_then(|workspaces| workspaces.into_iter().next())
+                {
+                    workspace.update(ctx, |ws, ctx| {
+                        ws.handle_action(&workspace_action, ctx);
+                    });
+                } else {
+                    log::warn!("remote_control: no workspace available for action");
                 }
             },
             |_, _| {
