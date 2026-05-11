@@ -65,7 +65,7 @@ mod projects;
 mod prompt;
 mod quit_warning;
 mod referral_theme_status;
-mod remote_control;
+pub mod remote_control;
 #[allow(dead_code)]
 mod remote_server;
 mod resource_limits;

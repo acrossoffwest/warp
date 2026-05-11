@@ -19,7 +19,7 @@ pub fn socket_address_path() -> Result<PathBuf> {
 
 pub struct RemoteControlServerHandle {
     pub(crate) server: ipc::Server,
-    pub action_rx: async_channel::Receiver<PendingAction>,
+    pub(crate) action_rx: async_channel::Receiver<PendingAction>,
 }
 
 pub fn start(background_executor: Arc<Background>) -> Result<RemoteControlServerHandle> {
