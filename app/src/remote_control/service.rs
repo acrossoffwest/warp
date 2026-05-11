@@ -25,7 +25,7 @@ pub enum RemoteControlResponse {
     Error { message: String },
 }
 
-pub enum RemoteControlService {}
+pub struct RemoteControlService {}
 impl Service for RemoteControlService {
     type Request = RemoteControlRequest;
     type Response = RemoteControlResponse;
