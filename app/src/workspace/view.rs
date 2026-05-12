@@ -131,6 +131,7 @@ use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, Ed
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::CLIAgent;
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -798,6 +799,7 @@ type WorkspaceMenuHandles = (
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum NewSessionSidecarSelection {
     OpenWorktreeRepo { repo_path: String },
+    LaunchCLIAgentInDirectory { agent: CLIAgent, directory: PathBuf },
 }
 
 #[derive(Debug, Default)]
@@ -1070,6 +1072,7 @@ pub struct Workspace {
     new_session_sidecar_menu: ViewHandle<Menu<NewSessionSidecarSelection>>,
     show_new_session_sidecar: bool,
     worktree_sidecar_active: bool,
+    new_session_sidecar_cli_agent: Option<CLIAgent>,
     worktree_sidecar_search_editor: ViewHandle<EditorView>,
     worktree_sidecar_search_query: String,
     new_session_sidecar_add_repo_mouse_state: MouseStateHandle,
@@ -1108,6 +1111,7 @@ impl Workspace {
     fn clear_worktree_sidecar_state(&mut self, ctx: &mut ViewContext<Self>) {
         self.show_new_session_sidecar = false;
         self.worktree_sidecar_active = false;
+        self.new_session_sidecar_cli_agent = None;
         self.worktree_sidecar_search_query.clear();
         self.worktree_sidecar_search_editor
             .update(ctx, |editor, ctx| {
@@ -1130,6 +1134,23 @@ impl Workspace {
             menu.set_submenu_being_shown_for_item_index(None);
         });
         ctx.notify();
+    }
+
+    fn fields_for_new_session_menu_item(
+        item: &MenuItem<WorkspaceAction>,
+    ) -> Option<&MenuItemFields<WorkspaceAction>> {
+        match item {
+            MenuItem::Item(fields) => Some(fields),
+            MenuItem::Header { fields, .. } => Some(fields),
+            _ => None,
+        }
+    }
+
+    fn active_terminal_current_directory(&self, ctx: &mut ViewContext<Self>) -> Option<PathBuf> {
+        self.active_session_view(ctx)
+            .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
     }
 
     fn select_first_worktree_sidecar_repo(&mut self, ctx: &mut ViewContext<Self>) {
@@ -3205,6 +3226,7 @@ impl Workspace {
             new_session_sidecar_menu,
             show_new_session_sidecar: false,
             worktree_sidecar_active: false,
+            new_session_sidecar_cli_agent: None,
             worktree_sidecar_search_editor: Self::build_worktree_sidecar_search_input(ctx),
             worktree_sidecar_search_query: String::new(),
             new_session_sidecar_add_repo_mouse_state: Default::default(),
@@ -6131,7 +6153,6 @@ impl Workspace {
         let shortcut_label = keybinding_name_to_display_string(NEW_TAB_BINDING_NAME, ctx);
         let reopen_closed_session_shortcut_label =
             keybinding_name_to_display_string("app:reopen_closed_session", ctx);
-
         // 1. Agent (if AI enabled)
         if is_any_ai_enabled {
             let mut agent_item = MenuItemFields::new("Agent")
@@ -6197,6 +6218,16 @@ impl Workspace {
                 }
                 menu_items.push(terminal_item.into_item());
             }
+        }
+
+        // 2b. Local CLI agents. The main row launches directly in the active
+        // terminal's cwd; hovering opens the directory picker sidecar.
+        for agent in [CLIAgent::Codex, CLIAgent::Claude] {
+            let icon = agent.icon().unwrap_or(icons::Icon::Terminal);
+            let fields = MenuItemFields::new_submenu(agent.display_name())
+                .with_on_select_action(WorkspaceAction::LaunchCLIAgentInCurrentDirectory { agent })
+                .with_icon(icon);
+            menu_items.push(fields.into_item());
         }
 
         // 3. Cloud Oz (if flags enabled)
@@ -8517,6 +8548,9 @@ impl Workspace {
             NewSessionSidecarSelection::OpenWorktreeRepo { repo_path } => {
                 self.open_worktree_in_repo(repo_path, ctx);
             }
+            NewSessionSidecarSelection::LaunchCLIAgentInDirectory { agent, directory } => {
+                self.launch_cli_agent_in_directory(agent, directory, ctx);
+            }
         }
     }
 
@@ -8657,6 +8691,7 @@ impl Workspace {
         &self,
         ctx: &AppContext,
     ) -> Vec<MenuItem<NewSessionSidecarSelection>> {
+        let cli_agent = self.new_session_sidecar_cli_agent;
         let search_editor = self.worktree_sidecar_search_editor.clone();
         let search_item = MenuItemFields::new_with_custom_label(
             Arc::new(move |_, _, appearance, _| {
@@ -8716,12 +8751,21 @@ impl Workspace {
                 })
                 .map(|ws| {
                     let path_str = ws.path.to_string_lossy().into_owned();
-                    MenuItemFields::new(path_str.clone())
-                        .with_on_select_action(NewSessionSidecarSelection::OpenWorktreeRepo {
+                    let mut fields =
+                        MenuItemFields::new(path_str.clone()).with_icon(icons::Icon::Folder);
+                    fields = if let Some(agent) = cli_agent {
+                        fields.with_on_select_action(
+                            NewSessionSidecarSelection::LaunchCLIAgentInDirectory {
+                                agent,
+                                directory: ws.path.clone(),
+                            },
+                        )
+                    } else {
+                        fields.with_on_select_action(NewSessionSidecarSelection::OpenWorktreeRepo {
                             repo_path: path_str,
                         })
-                        .with_icon(icons::Icon::Folder)
-                        .into_item()
+                    };
+                    fields.into_item()
                 })
                 .collect::<Vec<_>>(),
         );
@@ -8732,8 +8776,10 @@ impl Workspace {
         &mut self,
         hovered_index: usize,
         auto_select_first_repo: bool,
+        cli_agent: Option<CLIAgent>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.new_session_sidecar_cli_agent = cli_agent;
         let items = self.build_worktree_sidecar_items(ctx);
         let repo_count = items.len().saturating_sub(1);
         log::info!(
@@ -8741,6 +8787,11 @@ impl Workspace {
             self.worktree_sidecar_search_query
         );
         let add_repo_mouse_state = self.new_session_sidecar_add_repo_mouse_state.clone();
+        let footer_label = if cli_agent.is_some() {
+            " Browse..."
+        } else {
+            " + Add new repo"
+        };
 
         self.new_session_sidecar_menu.update(ctx, |menu, view_ctx| {
             menu.set_items(items, view_ctx);
@@ -8766,7 +8817,7 @@ impl Workspace {
                                 .with_main_axis_size(MainAxisSize::Max)
                                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                                 .with_child(
-                                    Text::new_inline(" + Add new repo", font_family, font_size)
+                                    Text::new_inline(footer_label, font_family, font_size)
                                         .with_color(text_color.into())
                                         .finish(),
                                 )
@@ -8785,8 +8836,14 @@ impl Workspace {
                     .finish()
                 })
                 .with_cursor(Cursor::PointingHand)
-                .on_click(|ctx: &mut warpui::elements::EventContext, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::OpenWorktreeAddRepoPicker);
+                .on_click(move |ctx: &mut warpui::elements::EventContext, _, _| {
+                    if let Some(agent) = cli_agent {
+                        ctx.dispatch_typed_action(WorkspaceAction::OpenCLIAgentFolderPicker {
+                            agent,
+                        });
+                    } else {
+                        ctx.dispatch_typed_action(WorkspaceAction::OpenWorktreeAddRepoPicker);
+                    }
                     ctx.dispatch_typed_action(crate::menu::MenuAction::Close(true));
                 })
                 .finish()
@@ -8821,10 +8878,10 @@ impl Workspace {
     ) {
         // Determine the SidecarItemKind from the hovered menu item's label and action.
         let hovered_action = self.new_session_dropdown_menu.read(ctx, |menu, _| {
-            menu.items().get(hovered_index).and_then(|item| match item {
-                MenuItem::Item(fields) => fields.on_select_action().cloned(),
-                _ => None,
-            })
+            menu.items()
+                .get(hovered_index)
+                .and_then(Self::fields_for_new_session_menu_item)
+                .and_then(|fields| fields.on_select_action().cloned())
         });
 
         let item_kind = match &hovered_action {
@@ -8919,7 +8976,8 @@ impl Workspace {
         else {
             return;
         };
-        self.configure_worktree_new_session_sidecar(hovered_index, true, ctx);
+        let cli_agent = self.new_session_sidecar_cli_agent;
+        self.configure_worktree_new_session_sidecar(hovered_index, true, cli_agent, ctx);
     }
 
     /// Updates the sidecar menu based on which item is hovered in the main
@@ -8941,18 +8999,23 @@ impl Workspace {
             return;
         };
 
-        // Check what the hovered item is by reading its label.
-        let hovered_label = self.new_session_dropdown_menu.read(ctx, |menu, _| {
-            menu.items().get(hovered_index).and_then(|item| match item {
-                MenuItem::Item(fields) => Some(fields.label().to_string()),
-                _ => None,
+        // Check what the hovered item is by reading its label and primary action.
+        let hovered_item = self.new_session_dropdown_menu.read(ctx, |menu, _| {
+            menu.items().get(hovered_index).and_then(|item| {
+                Self::fields_for_new_session_menu_item(item).map(|fields| {
+                    (
+                        fields.label().to_string(),
+                        fields.on_select_action().cloned(),
+                    )
+                })
             })
         });
 
         // Separator or non-labeled item — hide sidecar.
-        let Some(label) = hovered_label else {
+        let Some((label, hovered_action)) = hovered_item else {
             if self.show_new_session_sidecar {
                 self.show_new_session_sidecar = false;
+                self.new_session_sidecar_cli_agent = None;
                 self.new_session_dropdown_menu.update(ctx, |menu, _| {
                     menu.set_safe_zone_target(None);
                     menu.set_submenu_being_shown_for_item_index(None);
@@ -8961,6 +9024,21 @@ impl Workspace {
             }
             return;
         };
+
+        if let Some(WorkspaceAction::LaunchCLIAgentInCurrentDirectory { agent }) = hovered_action {
+            self.tab_config_action_sidecar_item = None;
+            let auto_select_first_repo = self.new_session_dropdown_menu.read(ctx, |menu, _| {
+                menu.last_selection_source() != Some(MenuSelectionSource::Pointer)
+            });
+            self.configure_worktree_new_session_sidecar(
+                hovered_index,
+                auto_select_first_repo,
+                Some(agent),
+                ctx,
+            );
+            ctx.notify();
+            return;
+        }
 
         match label.as_str() {
             "New worktree config" => {
@@ -8971,6 +9049,7 @@ impl Workspace {
                 self.configure_worktree_new_session_sidecar(
                     hovered_index,
                     auto_select_first_repo,
+                    None,
                     ctx,
                 );
             }
@@ -8980,6 +9059,7 @@ impl Workspace {
                 if self.show_new_session_sidecar {
                     self.show_new_session_sidecar = false;
                     self.worktree_sidecar_active = false;
+                    self.new_session_sidecar_cli_agent = None;
                     self.new_session_dropdown_menu.update(ctx, |menu, _| {
                         menu.set_safe_zone_target(None);
                         menu.set_submenu_being_shown_for_item_index(None);
@@ -8990,6 +9070,7 @@ impl Workspace {
             _ => {
                 self.show_new_session_sidecar = false;
                 self.worktree_sidecar_active = false;
+                self.new_session_sidecar_cli_agent = None;
                 self.configure_action_sidecar_for_hovered_item(&label, hovered_index, ctx);
             }
         }
@@ -9480,6 +9561,26 @@ impl Workspace {
                 let path_buf: PathBuf = path.into();
                 PersistedWorkspace::handle(ctx).update(ctx, |persisted, ctx| {
                     persisted.user_added_workspace(path_buf, ctx);
+                });
+            },
+            warpui::platform::FilePickerConfiguration::new().folders_only(),
+        );
+    }
+
+    fn open_folder_picker_for_cli_agent(&mut self, agent: CLIAgent, ctx: &mut ViewContext<Self>) {
+        ctx.open_file_picker(
+            move |result, ctx| {
+                let Ok(paths) = result else { return };
+                let Some(path) = paths.into_iter().next() else {
+                    return;
+                };
+                let path_buf: PathBuf = path.into();
+                PersistedWorkspace::handle(ctx).update(ctx, |persisted, ctx| {
+                    persisted.user_added_workspace(path_buf.clone(), ctx);
+                });
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::LaunchCLIAgentInDirectory {
+                    agent,
+                    directory: path_buf,
                 });
             },
             warpui::platform::FilePickerConfiguration::new().folders_only(),
@@ -10679,6 +10780,56 @@ impl Workspace {
             hide_homepage,
             ctx,
         );
+        ctx.notify();
+    }
+
+    fn launch_cli_agent_in_current_directory(
+        &mut self,
+        agent: CLIAgent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(directory) = self.active_terminal_current_directory(ctx) else {
+            log::warn!(
+                "Cannot launch {}: no active local terminal directory",
+                agent.display_name()
+            );
+            return;
+        };
+        self.launch_cli_agent_in_directory(agent, directory, ctx);
+    }
+
+    fn launch_cli_agent_in_directory(
+        &mut self,
+        agent: CLIAgent,
+        directory: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                initial_directory: Some(directory),
+                hide_homepage: true,
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+
+        let Some(terminal_view) = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+        else {
+            log::warn!(
+                "Could not find terminal after creating tab for {}",
+                agent.display_name()
+            );
+            return;
+        };
+
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.execute_command_or_set_pending(agent.command_prefix(), ctx);
+        });
         ctx.notify();
     }
 
@@ -20518,6 +20669,18 @@ impl TypedActionView for Workspace {
             AddGetStartedTab => self.add_get_started_tab(ctx),
             AddAmbientAgentTab => self.add_ambient_agent_tab(ctx),
             AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
+            OpenCLIAgentFolderPicker { agent } => {
+                self.close_new_session_dropdown_menu(ctx);
+                self.open_folder_picker_for_cli_agent(*agent, ctx);
+            }
+            LaunchCLIAgentInCurrentDirectory { agent } => {
+                self.close_new_session_dropdown_menu(ctx);
+                self.launch_cli_agent_in_current_directory(*agent, ctx);
+            }
+            LaunchCLIAgentInDirectory { agent, directory } => {
+                self.close_new_session_dropdown_menu(ctx);
+                self.launch_cli_agent_in_directory(*agent, directory.clone(), ctx);
+            }
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
@@ -22998,10 +23161,10 @@ impl View for Workspace {
             if self.show_new_session_sidecar {
                 let anchor_label = self.new_session_dropdown_menu.read(app, |menu, _| {
                     menu.hovered_index().and_then(|idx| {
-                        menu.items().get(idx).and_then(|item| match item {
-                            MenuItem::Item(fields) => Some(fields.label().to_string()),
-                            _ => None,
-                        })
+                        menu.items()
+                            .get(idx)
+                            .and_then(Self::fields_for_new_session_menu_item)
+                            .map(|fields| fields.label().to_string())
                     })
                 });
 
@@ -23048,10 +23211,10 @@ impl View for Workspace {
             if let Some(sidecar_item) = &self.tab_config_action_sidecar_item {
                 let anchor_label = self.new_session_dropdown_menu.read(app, |menu, _| {
                     menu.hovered_index().and_then(|idx| {
-                        menu.items().get(idx).and_then(|item| match item {
-                            MenuItem::Item(fields) => Some(fields.label().to_string()),
-                            _ => None,
-                        })
+                        menu.items()
+                            .get(idx)
+                            .and_then(Self::fields_for_new_session_menu_item)
+                            .map(|fields| fields.label().to_string())
                     })
                 });
 

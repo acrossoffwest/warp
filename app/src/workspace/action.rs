@@ -25,6 +25,7 @@ use crate::tab::{NewSessionMenuItem, SelectedTabColor};
 use crate::tab_configs::TabConfig;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
+use crate::terminal::CLIAgent;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
@@ -156,6 +157,19 @@ pub enum WorkspaceAction {
     AddAmbientAgentTab,
     /// Add a new tab that immediately enters agent view with a new conversation.
     AddAgentTab,
+    /// Opens the folder picker for launching a CLI agent in a new terminal tab.
+    OpenCLIAgentFolderPicker {
+        agent: CLIAgent,
+    },
+    /// Add a new terminal tab in the active terminal's current directory and launch a CLI agent.
+    LaunchCLIAgentInCurrentDirectory {
+        agent: CLIAgent,
+    },
+    /// Add a new terminal tab in the provided directory and launch a CLI agent.
+    LaunchCLIAgentInDirectory {
+        agent: CLIAgent,
+        directory: PathBuf,
+    },
     /// Add a new tab running a local Docker sandbox via `sbx`.
     AddDockerSandboxTab,
     OpenNewSessionMenu {
@@ -752,6 +766,8 @@ impl WorkspaceAction {
             | AddGetStartedTab
             | AddAgentTab
             | AddAmbientAgentTab
+            | LaunchCLIAgentInCurrentDirectory { .. }
+            | LaunchCLIAgentInDirectory { .. }
             | AddDockerSandboxTab
             | AddWindow
             | AddWindowWithShell { .. }
@@ -809,6 +825,7 @@ impl WorkspaceAction {
             | ToggleTabConfigsMenu
             | ToggleNewSessionMenu { .. }
             | SelectNewSessionMenuItem(_)
+            | OpenCLIAgentFolderPicker { .. }
             | ToggleTabBarOverflowMenu
             | CheckForUpdate
             | SetA11yVerbosityLevel(_)
