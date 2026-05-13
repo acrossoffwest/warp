@@ -291,6 +291,24 @@ impl CLIAgent {
         )
     }
 
+    pub fn supports_resume(&self) -> bool {
+        matches!(self, CLIAgent::Claude | CLIAgent::Codex)
+    }
+
+    /// Shell command to resume an existing session by ID.
+    ///
+    /// Callers must ensure `session_id` is a UUID (contains only `[0-9a-f-]`).
+    pub fn resume_command(&self, session_id: &str) -> String {
+        match self {
+            CLIAgent::Claude => format!("claude --resume {session_id}"),
+            CLIAgent::Codex => format!("codex --resume {session_id}"),
+            other => {
+                log::warn!("resume_command called on non-resumable agent {other:?}");
+                self.command_prefix().to_owned()
+            }
+        }
+    }
+
     /// Returns the brand color for this CLI agent, or `None` for unknown/custom agents.
     pub fn brand_color(&self) -> Option<ColorU> {
         match self {

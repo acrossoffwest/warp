@@ -553,3 +553,24 @@ fn test_detect_aifx_agent_run_claude_wrong_team() {
         });
     });
 }
+
+#[test]
+fn supports_resume_only_for_claude_and_codex() {
+    assert!(CLIAgent::Claude.supports_resume());
+    assert!(CLIAgent::Codex.supports_resume());
+    assert!(!CLIAgent::Gemini.supports_resume());
+    assert!(!CLIAgent::Amp.supports_resume());
+}
+
+#[test]
+fn resume_command_format() {
+    let id = "019e159b-717d-7663-9a93-95fd9c0790b1";
+    assert_eq!(
+        CLIAgent::Claude.resume_command(id),
+        format!("claude --resume {id}")
+    );
+    assert_eq!(
+        CLIAgent::Codex.resume_command(id),
+        format!("codex --resume {id}")
+    );
+}
