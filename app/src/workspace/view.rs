@@ -609,6 +609,8 @@ const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_
 /// `SavePosition` wrapper and the safe-zone rect lookup.
 const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
+const SESSIONS_SUB_SIDECAR_POSITION_ID: &str = "sessions_sub_sidecar";
+const SESSIONS_SUB_SIDECAR_WIDTH: f32 = 320.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT: f32 = 32.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING: f32 = 12.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_VERTICAL_PADDING: f32 = 6.;
@@ -800,6 +802,12 @@ type WorkspaceMenuHandles = (
 enum NewSessionSidecarSelection {
     OpenWorktreeRepo { repo_path: String },
     LaunchCLIAgentInDirectory { agent: CLIAgent, directory: PathBuf },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SessionSidecarSelection {
+    NewSession { agent: CLIAgent, directory: PathBuf },
+    ResumeSession { agent: CLIAgent, directory: PathBuf, session_id: String },
 }
 
 #[derive(Debug, Default)]
@@ -1073,6 +1081,12 @@ pub struct Workspace {
     show_new_session_sidecar: bool,
     worktree_sidecar_active: bool,
     new_session_sidecar_cli_agent: Option<CLIAgent>,
+    sessions_sub_sidecar_menu: ViewHandle<Menu<SessionSidecarSelection>>,
+    show_sessions_sub_sidecar: bool,
+    sessions_sub_sidecar_agent: Option<CLIAgent>,
+    sessions_sub_sidecar_directory: Option<PathBuf>,
+    sessions_sub_sidecar_filter_editor: ViewHandle<EditorView>,
+    sessions_sub_sidecar_filter: String,
     worktree_sidecar_search_editor: ViewHandle<EditorView>,
     worktree_sidecar_search_query: String,
     new_session_sidecar_add_repo_mouse_state: MouseStateHandle,
@@ -1854,6 +1868,23 @@ impl Workspace {
         (tab_right_click_menu, new_session_menu, new_session_sidecar)
     }
 
+    fn build_sessions_sub_sidecar_menus(
+        ctx: &mut ViewContext<Self>,
+    ) -> (ViewHandle<Menu<SessionSidecarSelection>>, ViewHandle<EditorView>) {
+        let sessions_sub_sidecar = ctx.add_typed_action_view(|_ctx| {
+            Menu::<SessionSidecarSelection>::new()
+                .without_item_action_dispatch()
+                .with_width(SESSIONS_SUB_SIDECAR_WIDTH)
+                .with_menu_variant(crate::menu::MenuVariant::scrollable())
+        });
+        ctx.subscribe_to_view(&sessions_sub_sidecar, move |me, _, event, ctx| {
+            me.handle_sessions_sub_sidecar_event(event, ctx);
+        });
+
+        let filter_editor = Self::build_sessions_sub_sidecar_filter_input(ctx);
+        (sessions_sub_sidecar, filter_editor)
+    }
+
     fn build_launch_config_save_modal(
         ctx: &mut ViewContext<Self>,
     ) -> ModalViewState<LaunchConfigSaveModal> {
@@ -2617,6 +2648,9 @@ impl Workspace {
         let (tab_right_click_menu, new_session_dropdown_menu, new_session_sidecar_menu) =
             Self::build_menus(ctx);
 
+        let (sessions_sub_sidecar_menu, sessions_sub_sidecar_filter_editor) =
+            Self::build_sessions_sub_sidecar_menus(ctx);
+
         // Subscribe to network changes
         ctx.subscribe_to_model(
             &NetworkStatus::handle(ctx),
@@ -3227,6 +3261,12 @@ impl Workspace {
             show_new_session_sidecar: false,
             worktree_sidecar_active: false,
             new_session_sidecar_cli_agent: None,
+            sessions_sub_sidecar_menu,
+            show_sessions_sub_sidecar: false,
+            sessions_sub_sidecar_agent: None,
+            sessions_sub_sidecar_directory: None,
+            sessions_sub_sidecar_filter_editor,
+            sessions_sub_sidecar_filter: String::new(),
             worktree_sidecar_search_editor: Self::build_worktree_sidecar_search_input(ctx),
             worktree_sidecar_search_query: String::new(),
             new_session_sidecar_add_repo_mouse_state: Default::default(),
