@@ -44,7 +44,7 @@ fn read_claude_sessions(directory: &Path, query: &str, limit: usize) -> Vec<Agen
     let mut sessions: Vec<AgentSessionEntry> = entries
         .flatten()
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("jsonl"))
-        .filter(|e| e.metadata().map(|m| m.len() > 100).unwrap_or(false))
+        .filter(|e| e.metadata().map(|m| m.len() >= 100).unwrap_or(false))
         .filter_map(|e| parse_claude_session(&e.path()))
         .filter(|s| {
             query_lower.is_empty()
@@ -156,7 +156,7 @@ fn read_codex_sessions(directory: &Path, query: &str, limit: usize) -> Vec<Agent
         return vec![];
     };
     let db_str = match db_path.to_str() {
-        Some(s) => s.to_owned(),
+        Some(s) => format!("file:{}?mode=ro", s),
         None => return vec![],
     };
     let Ok(mut conn) = SqliteConnection::establish(&db_str) else {
