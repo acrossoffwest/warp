@@ -150,6 +150,38 @@ pub enum CLIAgent {
 
 impl CLIAgent {
     /// The command prefix used to invoke this CLI agent.
+    /// The opt-in "dangerous" flag this agent honors (skips permission /
+    /// approval gates). `None` for agents that don't expose such a flag.
+    pub fn dangerous_flag(&self) -> Option<&'static str> {
+        match self {
+            CLIAgent::Claude => Some("--dangerously-skip-permissions"),
+            CLIAgent::Codex => Some("--dangerously-bypass-approvals-and-sandbox"),
+            _ => None,
+        }
+    }
+
+    /// Build the launch command for a fresh session, optionally appending the
+    /// agent's dangerous flag when the user has opted in via settings.
+    pub fn launch_command(&self, dangerous: bool) -> String {
+        let prefix = self.command_prefix();
+        match (dangerous, self.dangerous_flag()) {
+            (true, Some(flag)) => format!("{prefix} {flag}"),
+            _ => prefix.to_owned(),
+        }
+    }
+
+    /// Build a resume command, optionally appending the dangerous flag.
+    pub fn resume_command_with_flags(&self, session_id: &str, dangerous: bool) -> String {
+        let base = self.resume_command(session_id);
+        if base.is_empty() {
+            return base;
+        }
+        match (dangerous, self.dangerous_flag()) {
+            (true, Some(flag)) => format!("{base} {flag}"),
+            _ => base,
+        }
+    }
+
     pub fn command_prefix(&self) -> &'static str {
         match self {
             CLIAgent::Claude => "claude",

@@ -1264,6 +1264,32 @@ define_settings_group!(AISettings, settings: [
         description: "Whether CLI agent Rich Input automatically closes after the user submits a prompt.",
     }
 
+    // When enabled, sessions launched via the `+ > Claude Code` menu (new or
+    // resumed) append `--dangerously-skip-permissions` to the `claude` command.
+    // Mirrors Claude Code's own opt-in flag.
+    claude_dangerously_skip_permissions: ClaudeDangerouslySkipPermissions {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.third_party.claude_dangerously_skip_permissions",
+        description: "Launch Claude Code with --dangerously-skip-permissions by default.",
+    }
+
+    // When enabled, sessions launched via the `+ > Codex` menu (new or
+    // resumed) append `--dangerously-bypass-approvals-and-sandbox` to the
+    // `codex` command.
+    codex_dangerously_bypass_approvals: CodexDangerouslyBypassApprovals {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.third_party.codex_dangerously_bypass_approvals_and_sandbox",
+        description: "Launch Codex with --dangerously-bypass-approvals-and-sandbox by default.",
+    }
+
     // Maps custom toolbar command regex patterns to specific CLI agents.
     // Keys are regex patterns matched against the full command string.
     // Values are serialized CLIAgent names (empty string = any agent).

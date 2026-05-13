@@ -608,9 +608,9 @@ const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_
 /// Shared position ID for the new-session sidecar overlay. Used for both the
 /// `SavePosition` wrapper and the safe-zone rect lookup.
 const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
-const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
+const NEW_SESSION_SIDECAR_WIDTH: f32 = 420.;
 const SESSIONS_SUB_SIDECAR_POSITION_ID: &str = "sessions_sub_sidecar";
-const SESSIONS_SUB_SIDECAR_WIDTH: f32 = 320.;
+const SESSIONS_SUB_SIDECAR_WIDTH: f32 = 480.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT: f32 = 32.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING: f32 = 12.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_VERTICAL_PADDING: f32 = 6.;
@@ -1087,6 +1087,12 @@ pub struct Workspace {
     sessions_sub_sidecar_directory: Option<PathBuf>,
     sessions_sub_sidecar_filter_editor: ViewHandle<EditorView>,
     sessions_sub_sidecar_filter: String,
+    /// Cached `(agent, dir) -> (source_version, all_sessions)` so each hover
+    /// doesn't re-scan jsonl/sqlite. Invalidated by source-mtime change.
+    sessions_cache: std::collections::HashMap<
+        (CLIAgent, PathBuf),
+        (Option<std::time::SystemTime>, Vec<crate::workspace::agent_session_reader::AgentSessionEntry>),
+    >,
     worktree_sidecar_search_editor: ViewHandle<EditorView>,
     worktree_sidecar_search_query: String,
     new_session_sidecar_add_repo_mouse_state: MouseStateHandle,
@@ -3340,6 +3346,7 @@ impl Workspace {
             sessions_sub_sidecar_directory: None,
             sessions_sub_sidecar_filter_editor,
             sessions_sub_sidecar_filter: String::new(),
+            sessions_cache: std::collections::HashMap::new(),
             worktree_sidecar_search_editor: Self::build_worktree_sidecar_search_input(ctx),
             worktree_sidecar_search_query: String::new(),
             new_session_sidecar_add_repo_mouse_state: Default::default(),
@@ -8777,7 +8784,9 @@ impl Workspace {
                 });
                 ctx.notify();
             }
-            MenuEvent::ItemSelected => {}
+            MenuEvent::ItemSelected => {
+                self.sync_sessions_sub_sidecar_to_sidecar_hover(ctx);
+            }
             MenuEvent::ItemHovered => {
                 self.sync_new_session_sidecar_selection_to_hover(ctx);
                 self.sync_sessions_sub_sidecar_to_sidecar_hover(ctx);
@@ -8786,8 +8795,11 @@ impl Workspace {
     }
 
     fn sync_sessions_sub_sidecar_to_sidecar_hover(&mut self, ctx: &mut ViewContext<Self>) {
+        // Submenu-parent rows (directory items with `›`) fire HoverSubmenuWithChildren
+        // which updates selected_index, not hovered_index. Prefer selected, fall back
+        // to hovered so leaf rows still work.
         let hovered = self.new_session_sidecar_menu.read(ctx, |menu, _| {
-            let idx = menu.hovered_index()?;
+            let idx = menu.selected_index().or_else(|| menu.hovered_index())?;
             let action = menu.items().get(idx)?.item_on_select_action().cloned()?;
             Some((idx, action))
         });
@@ -8900,7 +8912,7 @@ impl Workspace {
                     }
                 })
                 .map(|ws| {
-                    let path_str = ws.path.to_string_lossy().into_owned();
+                    let path_str = truncate_path_from_start(&abbreviate_home_path(&ws.path), 48);
                     let fields = if let Some(agent) = cli_agent {
                         let action = NewSessionSidecarSelection::LaunchCLIAgentInDirectory {
                             agent,
@@ -9039,12 +9051,29 @@ impl Workspace {
         self.sessions_sub_sidecar_agent = Some(agent);
         self.sessions_sub_sidecar_directory = Some(directory.clone());
 
-        let sessions = agent_session_reader::read_sessions(
-            agent,
-            &directory,
-            &self.sessions_sub_sidecar_filter,
-            10,
-        );
+        let current_version = agent_session_reader::source_version(agent, &directory);
+        let cache_key = (agent, directory.clone());
+        let needs_reload = self
+            .sessions_cache
+            .get(&cache_key)
+            .map(|(v, _)| v != &current_version)
+            .unwrap_or(true);
+        if needs_reload {
+            let all = agent_session_reader::read_all_sessions(agent, &directory);
+            self.sessions_cache.insert(cache_key.clone(), (current_version, all));
+        }
+        let all = self
+            .sessions_cache
+            .get(&cache_key)
+            .map(|(_, v)| v.as_slice())
+            .unwrap_or(&[]);
+        let q = self.sessions_sub_sidecar_filter.to_lowercase();
+        let sessions: Vec<_> = all
+            .iter()
+            .filter(|s| q.is_empty() || s.title.to_lowercase().contains(q.as_str()))
+            .take(25)
+            .cloned()
+            .collect();
 
         let filter_editor = self.sessions_sub_sidecar_filter_editor.clone();
         let filter_item = MenuItemFields::new_with_custom_label(
@@ -11147,8 +11176,10 @@ impl Workspace {
             return;
         };
 
+        let dangerous = cli_agent_dangerous_flag_enabled(agent, ctx);
+        let command = agent.launch_command(dangerous);
         terminal_view.update(ctx, |terminal_view, ctx| {
-            terminal_view.execute_command_or_set_pending(agent.command_prefix(), ctx);
+            terminal_view.execute_command_or_set_pending(&command, ctx);
         });
         ctx.notify();
     }
@@ -11183,8 +11214,10 @@ impl Workspace {
             return;
         };
 
+        let dangerous = cli_agent_dangerous_flag_enabled(agent, ctx);
+        let command = agent.resume_command_with_flags(&session_id, dangerous);
         terminal_view.update(ctx, |terminal_view, ctx| {
-            terminal_view.execute_command_or_set_pending(&agent.resume_command(&session_id), ctx);
+            terminal_view.execute_command_or_set_pending(&command, ctx);
         });
         ctx.notify();
     }
@@ -23568,7 +23601,7 @@ impl View for Workspace {
                 if let Some(anchor_label) = self
                     .sessions_sub_sidecar_directory
                     .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
+                    .map(|p| truncate_path_from_start(&abbreviate_home_path(p), 48))
                 {
                     let sidecar_element = SavePosition::new(
                         ChildView::new(&self.sessions_sub_sidecar_menu).finish(),
@@ -25173,10 +25206,17 @@ fn compute_default_panel_widths(
     }
 }
 
-/// Idempotently sets the opencode-warp plugin entry in `~/.config/opencode/opencode.json`.
-/// Removes any existing opencode-warp plugin entries (both local file:// and github:) and adds
-/// the given `new_entry`. Creates the config file with a default structure if it doesn't exist.
-#[cfg(debug_assertions)]
+/// Reads the user's per-agent opt-in for the agent's dangerous flag from
+/// AISettings. Agents without a dangerous flag always return `false`.
+fn cli_agent_dangerous_flag_enabled(agent: CLIAgent, ctx: &AppContext) -> bool {
+    let s = crate::settings::AISettings::as_ref(ctx);
+    match agent {
+        CLIAgent::Claude => *s.claude_dangerously_skip_permissions,
+        CLIAgent::Codex => *s.codex_dangerously_bypass_approvals,
+        _ => false,
+    }
+}
+
 fn format_session_label(updated_at: i64, title: &str) -> String {
     use chrono::{DateTime, Local, Utc};
     let dt: DateTime<Local> = DateTime::<Utc>::from_timestamp(updated_at, 0)
@@ -25185,6 +25225,45 @@ fn format_session_label(updated_at: i64, title: &str) -> String {
     format!("{}  {}", dt.format("%d %b %H:%M"), title)
 }
 
+fn truncate_path_from_start(path: &str, max_chars: usize) -> String {
+    let n = path.chars().count();
+    if n <= max_chars {
+        return path.to_owned();
+    }
+    let skip = n - (max_chars.saturating_sub(1));
+    let tail: String = path.chars().skip(skip).collect();
+    format!("…{tail}")
+}
+
+fn abbreviate_home_path(path: &Path) -> String {
+    let full = path.to_string_lossy();
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(h) = dirs::home_dir() {
+        candidates.push(h.to_string_lossy().into_owned());
+    }
+    if cfg!(target_os = "macos") {
+        if let Ok(user) = std::env::var("USER") {
+            candidates.push(format!("/Users/{user}"));
+        }
+    } else if cfg!(target_os = "linux") {
+        if let Ok(user) = std::env::var("USER") {
+            candidates.push(format!("/home/{user}"));
+        }
+    }
+    for home in candidates {
+        if let Some(rest) = full.strip_prefix(home.as_str()) {
+            if rest.is_empty() || rest.starts_with('/') {
+                return format!("~{rest}");
+            }
+        }
+    }
+    full.into_owned()
+}
+
+/// Idempotently sets the opencode-warp plugin entry in `~/.config/opencode/opencode.json`.
+/// Removes any existing opencode-warp plugin entries (both local file:// and github:) and adds
+/// the given `new_entry`. Creates the config file with a default structure if it doesn't exist.
+#[cfg(debug_assertions)]
 fn set_opencode_warp_plugin(new_entry: &str) -> String {
     let Some(home) = dirs::home_dir() else {
         return "Failed to determine home directory".to_string();

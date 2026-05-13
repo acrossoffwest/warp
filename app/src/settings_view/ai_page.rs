@@ -30,6 +30,7 @@ use crate::settings::{
     FileBasedMcpEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
     IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
     NaturalLanguageAutosuggestionsEnabled, OrchestrationEnabled, RuleSuggestionsEnabled,
+    ClaudeDangerouslySkipPermissions, CodexDangerouslyBypassApprovals,
     SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
@@ -2274,6 +2275,8 @@ pub enum AISettingsPageAction {
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
     ToggleAutoDismissRichInputAfterSubmit,
+    ToggleClaudeDangerouslySkipPermissions,
+    ToggleCodexDangerouslyBypassApprovals,
     SetCLIAgentForCommand {
         pattern: String,
         agent: Option<CLIAgent>,
@@ -2548,6 +2551,22 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .auto_dismiss_rich_input_after_submit
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleClaudeDangerouslySkipPermissions => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .claude_dangerously_skip_permissions
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleCodexDangerouslyBypassApprovals => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .codex_dangerously_bypass_approvals
                         .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
@@ -5787,6 +5806,8 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    claude_dangerous_toggle: SwitchStateHandle,
+    codex_dangerous_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CLIAgentWidget {
@@ -6049,6 +6070,38 @@ impl SettingsWidget for CLIAgentWidget {
                 ));
             }
         }
+
+        // Per-agent dangerous-flag opt-ins. Always visible, independent of
+        // the toolbar setting — they control how `+ > Claude Code` and
+        // `+ > Codex` build their launch command.
+        column.add_child(
+            build_sub_header(
+                appearance,
+                "Default launch flags",
+                Some(styles::header_font_color(true, app)),
+            )
+            .with_padding_top(HEADER_PADDING)
+            .with_padding_bottom(HEADER_PADDING)
+            .finish(),
+        );
+        column.add_child(render_ai_setting_toggle::<ClaudeDangerouslySkipPermissions>(
+            "Claude Code: --dangerously-skip-permissions",
+            AISettingsPageAction::ToggleClaudeDangerouslySkipPermissions,
+            *ai_settings.claude_dangerously_skip_permissions,
+            true,
+            self.claude_dangerous_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<CodexDangerouslyBypassApprovals>(
+            "Codex: --dangerously-bypass-approvals-and-sandbox",
+            AISettingsPageAction::ToggleCodexDangerouslyBypassApprovals,
+            *ai_settings.codex_dangerously_bypass_approvals,
+            true,
+            self.codex_dangerous_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
 
         column.finish()
     }
