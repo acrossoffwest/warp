@@ -304,7 +304,7 @@ impl CLIAgent {
             CLIAgent::Codex => format!("codex --resume {session_id}"),
             other => {
                 log::warn!("resume_command called on non-resumable agent {other:?}");
-                self.command_prefix().to_owned()
+                String::new()
             }
         }
     }
