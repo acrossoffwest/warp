@@ -1282,6 +1282,74 @@ impl Workspace {
         editor
     }
 
+    fn build_sessions_sub_sidecar_filter_input(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<EditorView> {
+        let editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let mut editor = EditorView::single_line(
+                SingleLineEditorOptions {
+                    text: TextOptions::ui_text(Some(appearance.ui_font_size()), appearance),
+                    select_all_on_focus: true,
+                    clear_selections_on_blur: true,
+                    propagate_and_no_op_vertical_navigation_keys:
+                        PropagateAndNoOpNavigationKeys::Always,
+                    ..Default::default()
+                },
+                ctx,
+            );
+            editor.set_placeholder_text("Filter sessions…", ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
+            EditorEvent::Edited(_) => {
+                me.sessions_sub_sidecar_filter = editor_view.as_ref(ctx).buffer_text(ctx);
+                me.refresh_sessions_sub_sidecar_if_active(ctx);
+                ctx.notify();
+            }
+            EditorEvent::Escape => {
+                me.close_new_session_dropdown_menu(ctx);
+            }
+            EditorEvent::Navigate(NavigationKey::Up) => {
+                me.sessions_sub_sidecar_menu.update(ctx, |menu, view_ctx| {
+                    menu.select_previous(view_ctx);
+                });
+            }
+            EditorEvent::Navigate(NavigationKey::Down) => {
+                me.sessions_sub_sidecar_menu.update(ctx, |menu, view_ctx| {
+                    menu.select_next(view_ctx);
+                });
+            }
+            EditorEvent::Enter => {
+                let sel = me.sessions_sub_sidecar_menu.read(ctx, |menu, _| {
+                    menu.selected_item().and_then(|item| match item {
+                        MenuItem::Item(fields) => fields.on_select_action().cloned(),
+                        _ => None,
+                    })
+                });
+                if let Some(sel) = sel {
+                    me.execute_session_sidecar_selection(sel, ctx);
+                    me.close_new_session_dropdown_menu(ctx);
+                }
+            }
+            _ => {}
+        });
+        editor
+    }
+
+    fn refresh_sessions_sub_sidecar_if_active(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.show_sessions_sub_sidecar {
+            return;
+        }
+        let Some(agent) = self.sessions_sub_sidecar_agent else {
+            return;
+        };
+        let Some(directory) = self.sessions_sub_sidecar_directory.clone() else {
+            return;
+        };
+        self.configure_sessions_sub_sidecar(agent, directory, ctx);
+    }
+
     fn vertical_tabs_search_input(ctx: &mut ViewContext<Self>) -> ViewHandle<EditorView> {
         let editor = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -8910,6 +8978,154 @@ impl Workspace {
         ctx.focus(&self.worktree_sidecar_search_editor);
     }
 
+    fn configure_sessions_sub_sidecar(
+        &mut self,
+        agent: CLIAgent,
+        directory: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::workspace::agent_session_reader;
+
+        self.sessions_sub_sidecar_agent = Some(agent);
+        self.sessions_sub_sidecar_directory = Some(directory.clone());
+
+        let sessions = agent_session_reader::read_sessions(
+            agent,
+            &directory,
+            &self.sessions_sub_sidecar_filter,
+            10,
+        );
+
+        let filter_editor = self.sessions_sub_sidecar_filter_editor.clone();
+        let filter_item = MenuItemFields::new_with_custom_label(
+            Arc::new(move |_, _, appearance, _| {
+                let theme = appearance.theme();
+                let search_icon = ConstrainedBox::new(
+                    icons::Icon::SearchSmall
+                        .to_warpui_icon(theme.sub_text_color(theme.surface_2()))
+                        .finish(),
+                )
+                .with_width(16.)
+                .with_height(16.)
+                .finish();
+                let row = Flex::row()
+                    .with_child(Container::new(search_icon).with_margin_right(8.).finish())
+                    .with_child(
+                        Shrinkable::new(1., ChildView::new(&filter_editor).finish()).finish(),
+                    )
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .finish();
+                ConstrainedBox::new(
+                    Container::new(row)
+                        .with_padding_left(NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING)
+                        .with_padding_right(NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING)
+                        .with_padding_top(NEW_SESSION_SIDECAR_SEARCH_BOX_VERTICAL_PADDING)
+                        .with_padding_bottom(NEW_SESSION_SIDECAR_SEARCH_BOX_VERTICAL_PADDING)
+                        .with_border(Border::all(1.).with_border_fill(theme.surface_3()))
+                        .with_corner_radius(CornerRadius::with_top(Radius::Pixels(4.)))
+                        .finish(),
+                )
+                .with_height(NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT)
+                .finish()
+            }),
+            Some("Filter sessions".to_string()),
+        )
+        .with_no_interaction_on_hover()
+        .no_highlight_on_hover()
+        .with_padding_override(0., 0.)
+        .into_item();
+
+        let new_session_item = MenuItemFields::new("▶ New session")
+            .with_on_select_action(SessionSidecarSelection::NewSession {
+                agent,
+                directory: directory.clone(),
+            })
+            .into_item();
+
+        let mut items = vec![filter_item, new_session_item, MenuItem::Separator];
+
+        if sessions.is_empty() {
+            items.push(
+                MenuItemFields::new("No previous sessions")
+                    .with_disabled(true)
+                    .into_item(),
+            );
+        } else {
+            for session in sessions {
+                let label = format_session_label(session.updated_at, &session.title);
+                items.push(
+                    MenuItemFields::new(label)
+                        .with_on_select_action(SessionSidecarSelection::ResumeSession {
+                            agent,
+                            directory: directory.clone(),
+                            session_id: session.session_id,
+                        })
+                        .into_item(),
+                );
+            }
+        }
+
+        self.sessions_sub_sidecar_menu
+            .update(ctx, |menu, view_ctx| menu.set_items(items, view_ctx));
+        self.show_sessions_sub_sidecar = true;
+        ctx.notify();
+    }
+
+    fn hide_sessions_sub_sidecar(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.show_sessions_sub_sidecar {
+            self.show_sessions_sub_sidecar = false;
+            self.sessions_sub_sidecar_agent = None;
+            self.sessions_sub_sidecar_directory = None;
+            ctx.notify();
+        }
+    }
+
+    fn handle_sessions_sub_sidecar_event(
+        &mut self,
+        event: &MenuEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            MenuEvent::Close { via_select_item } => {
+                if *via_select_item {
+                    let sel = self.sessions_sub_sidecar_menu.read(ctx, |menu, _| {
+                        menu.selected_item().and_then(|item| match item {
+                            MenuItem::Item(fields) => fields.on_select_action().cloned(),
+                            _ => None,
+                        })
+                    });
+                    if let Some(sel) = sel {
+                        self.execute_session_sidecar_selection(sel, ctx);
+                        self.show_new_session_dropdown_menu = None;
+                    }
+                }
+                self.hide_sessions_sub_sidecar(ctx);
+                ctx.notify();
+            }
+            MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+        }
+    }
+
+    fn execute_session_sidecar_selection(
+        &mut self,
+        selection: SessionSidecarSelection,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match selection {
+            SessionSidecarSelection::NewSession { agent, directory } => {
+                self.launch_cli_agent_in_directory(agent, directory, ctx);
+            }
+            SessionSidecarSelection::ResumeSession {
+                agent,
+                directory,
+                session_id,
+            } => {
+                self.launch_cli_agent_with_resume(agent, directory, session_id, ctx);
+            }
+        }
+    }
+
     fn configure_action_sidecar_for_hovered_item(
         &mut self,
         label: &str,
@@ -10869,6 +11085,42 @@ impl Workspace {
 
         terminal_view.update(ctx, |terminal_view, ctx| {
             terminal_view.execute_command_or_set_pending(agent.command_prefix(), ctx);
+        });
+        ctx.notify();
+    }
+
+    fn launch_cli_agent_with_resume(
+        &mut self,
+        agent: CLIAgent,
+        directory: PathBuf,
+        session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                initial_directory: Some(directory),
+                hide_homepage: true,
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+
+        let Some(terminal_view) = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+        else {
+            log::warn!(
+                "Could not find terminal after creating tab for {} resume",
+                agent.display_name()
+            );
+            return;
+        };
+
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.execute_command_or_set_pending(&agent.resume_command(&session_id), ctx);
         });
         ctx.notify();
     }
@@ -24816,6 +25068,14 @@ fn compute_default_panel_widths(
 /// Removes any existing opencode-warp plugin entries (both local file:// and github:) and adds
 /// the given `new_entry`. Creates the config file with a default structure if it doesn't exist.
 #[cfg(debug_assertions)]
+fn format_session_label(updated_at: i64, title: &str) -> String {
+    use chrono::{DateTime, Local, Utc};
+    let dt: DateTime<Local> = DateTime::<Utc>::from_timestamp(updated_at, 0)
+        .unwrap_or_default()
+        .into();
+    format!("{}  {}", dt.format("%d %b %H:%M"), title)
+}
+
 fn set_opencode_warp_plugin(new_entry: &str) -> String {
     let Some(home) = dirs::home_dir() else {
         return "Failed to determine home directory".to_string();
