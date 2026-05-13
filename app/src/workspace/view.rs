@@ -23531,6 +23531,51 @@ impl View for Workspace {
                 }
             }
 
+            // Level 3 — sessions sub-sidecar (anchored to hovered directory in L2).
+            if self.show_sessions_sub_sidecar {
+                if let Some(anchor_label) = self
+                    .sessions_sub_sidecar_directory
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                {
+                    let sidecar_element = SavePosition::new(
+                        ChildView::new(&self.sessions_sub_sidecar_menu).finish(),
+                        SESSIONS_SUB_SIDECAR_POSITION_ID,
+                    )
+                    .finish();
+
+                    let render_left = self.should_render_sidecar_left(
+                        &anchor_label,
+                        SESSIONS_SUB_SIDECAR_WIDTH,
+                        app,
+                    );
+                    let (offset, parent_anchor, child_anchor) = if render_left {
+                        (
+                            vec2f(-4., 0.),
+                            PositionedElementAnchor::TopLeft,
+                            ChildAnchor::TopRight,
+                        )
+                    } else {
+                        (
+                            vec2f(4., 0.),
+                            PositionedElementAnchor::TopRight,
+                            ChildAnchor::TopLeft,
+                        )
+                    };
+
+                    stack.add_positioned_overlay_child(
+                        sidecar_element,
+                        OffsetPositioning::offset_from_save_position_element(
+                            anchor_label,
+                            offset,
+                            PositionedElementOffsetBounds::WindowByPosition,
+                            parent_anchor,
+                            child_anchor,
+                        ),
+                    );
+                }
+            }
+
             // Action sidecar for actionable items (Terminal, Agent, Cloud Oz, tab configs).
             if let Some(sidecar_item) = &self.tab_config_action_sidecar_item {
                 let anchor_label = self.new_session_dropdown_menu.read(app, |menu, _| {
