@@ -1126,6 +1126,7 @@ impl Workspace {
         self.show_new_session_sidecar = false;
         self.worktree_sidecar_active = false;
         self.new_session_sidecar_cli_agent = None;
+        self.hide_sessions_sub_sidecar(ctx);
         self.worktree_sidecar_search_query.clear();
         self.worktree_sidecar_search_editor
             .update(ctx, |editor, ctx| {
@@ -8775,6 +8776,30 @@ impl Workspace {
             MenuEvent::ItemSelected => {}
             MenuEvent::ItemHovered => {
                 self.sync_new_session_sidecar_selection_to_hover(ctx);
+                self.sync_sessions_sub_sidecar_to_sidecar_hover(ctx);
+            }
+        }
+    }
+
+    fn sync_sessions_sub_sidecar_to_sidecar_hover(&mut self, ctx: &mut ViewContext<Self>) {
+        let hovered = self.new_session_sidecar_menu.read(ctx, |menu, _| {
+            let idx = menu.hovered_index()?;
+            menu.items().get(idx)?.item_on_select_action().cloned()
+        });
+
+        match hovered {
+            Some(NewSessionSidecarSelection::LaunchCLIAgentInDirectory { agent, directory })
+                if agent.supports_resume() =>
+            {
+                let needs_configure = self.sessions_sub_sidecar_directory.as_ref()
+                    != Some(&directory)
+                    || self.sessions_sub_sidecar_agent != Some(agent);
+                if needs_configure {
+                    self.configure_sessions_sub_sidecar(agent, directory, ctx);
+                }
+            }
+            _ => {
+                self.hide_sessions_sub_sidecar(ctx);
             }
         }
     }
@@ -8859,19 +8884,26 @@ impl Workspace {
                 })
                 .map(|ws| {
                     let path_str = ws.path.to_string_lossy().into_owned();
-                    let mut fields =
-                        MenuItemFields::new(path_str.clone()).with_icon(icons::Icon::Folder);
-                    fields = if let Some(agent) = cli_agent {
-                        fields.with_on_select_action(
-                            NewSessionSidecarSelection::LaunchCLIAgentInDirectory {
-                                agent,
-                                directory: ws.path.clone(),
-                            },
-                        )
+                    let fields = if let Some(agent) = cli_agent {
+                        let action = NewSessionSidecarSelection::LaunchCLIAgentInDirectory {
+                            agent,
+                            directory: ws.path.clone(),
+                        };
+                        if agent.supports_resume() {
+                            MenuItemFields::new_submenu(path_str.clone())
+                                .with_icon(icons::Icon::Folder)
+                                .with_on_select_action(action)
+                        } else {
+                            MenuItemFields::new(path_str.clone())
+                                .with_icon(icons::Icon::Folder)
+                                .with_on_select_action(action)
+                        }
                     } else {
-                        fields.with_on_select_action(NewSessionSidecarSelection::OpenWorktreeRepo {
-                            repo_path: path_str,
-                        })
+                        MenuItemFields::new(path_str.clone())
+                            .with_icon(icons::Icon::Folder)
+                            .with_on_select_action(NewSessionSidecarSelection::OpenWorktreeRepo {
+                                repo_path: path_str,
+                            })
                     };
                     fields.into_item()
                 })
