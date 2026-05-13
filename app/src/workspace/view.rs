@@ -1348,7 +1348,11 @@ impl Workspace {
         let Some(directory) = self.sessions_sub_sidecar_directory.clone() else {
             return;
         };
-        self.configure_sessions_sub_sidecar(agent, directory, ctx);
+        let hovered_index = self
+            .new_session_sidecar_menu
+            .read(ctx, |menu, _| menu.hovered_index())
+            .unwrap_or(0);
+        self.configure_sessions_sub_sidecar(agent, directory, hovered_index, ctx);
     }
 
     fn vertical_tabs_search_input(ctx: &mut ViewContext<Self>) -> ViewHandle<EditorView> {
@@ -8784,18 +8788,31 @@ impl Workspace {
     fn sync_sessions_sub_sidecar_to_sidecar_hover(&mut self, ctx: &mut ViewContext<Self>) {
         let hovered = self.new_session_sidecar_menu.read(ctx, |menu, _| {
             let idx = menu.hovered_index()?;
-            menu.items().get(idx)?.item_on_select_action().cloned()
+            let action = menu.items().get(idx)?.item_on_select_action().cloned()?;
+            Some((idx, action))
         });
 
         match hovered {
-            Some(NewSessionSidecarSelection::LaunchCLIAgentInDirectory { agent, directory })
-                if agent.supports_resume() =>
-            {
+            Some((
+                hovered_index,
+                NewSessionSidecarSelection::LaunchCLIAgentInDirectory { agent, directory },
+            )) if agent.supports_resume() => {
                 let needs_configure = self.sessions_sub_sidecar_directory.as_ref()
                     != Some(&directory)
                     || self.sessions_sub_sidecar_agent != Some(agent);
                 if needs_configure {
-                    self.configure_sessions_sub_sidecar(agent, directory, ctx);
+                    self.configure_sessions_sub_sidecar(agent, directory, hovered_index, ctx);
+                } else {
+                    // Refresh safe-zone every hover event so the L3 rect is
+                    // picked up after the first frame where the sidecar appears.
+                    let sidecar_rect = ctx.element_position_by_id_at_last_frame(
+                        self.window_id,
+                        SESSIONS_SUB_SIDECAR_POSITION_ID,
+                    );
+                    self.new_session_sidecar_menu.update(ctx, |menu, _| {
+                        menu.set_safe_zone_target(sidecar_rect);
+                        menu.set_submenu_being_shown_for_item_index(Some(hovered_index));
+                    });
                 }
             }
             _ => {
@@ -9014,6 +9031,7 @@ impl Workspace {
         &mut self,
         agent: CLIAgent,
         directory: PathBuf,
+        hovered_index: usize,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::workspace::agent_session_reader;
@@ -9101,6 +9119,16 @@ impl Workspace {
         self.sessions_sub_sidecar_menu
             .update(ctx, |menu, view_ctx| menu.set_items(items, view_ctx));
         self.show_sessions_sub_sidecar = true;
+
+        let sidecar_rect = ctx.element_position_by_id_at_last_frame(
+            self.window_id,
+            SESSIONS_SUB_SIDECAR_POSITION_ID,
+        );
+        self.new_session_sidecar_menu.update(ctx, |menu, _| {
+            menu.set_safe_zone_target(sidecar_rect);
+            menu.set_submenu_being_shown_for_item_index(Some(hovered_index));
+        });
+        ctx.focus(&self.sessions_sub_sidecar_filter_editor);
         ctx.notify();
     }
 
@@ -9109,6 +9137,10 @@ impl Workspace {
             self.show_sessions_sub_sidecar = false;
             self.sessions_sub_sidecar_agent = None;
             self.sessions_sub_sidecar_directory = None;
+            self.new_session_sidecar_menu.update(ctx, |menu, _| {
+                menu.set_safe_zone_target(None);
+                menu.set_submenu_being_shown_for_item_index(None);
+            });
             ctx.notify();
         }
     }
