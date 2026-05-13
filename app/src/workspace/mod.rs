@@ -21,6 +21,7 @@ pub mod tab_settings;
 mod toast_stack;
 pub mod util;
 pub mod view;
+pub mod agent_session_reader;
 
 use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
 use crate::ai::skills::SkillManager;
