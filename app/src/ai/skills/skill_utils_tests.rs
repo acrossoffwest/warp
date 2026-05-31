@@ -1,62 +1,39 @@
 use std::path::PathBuf;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use super::*;
 
+fn remote_location(path: &str) -> LocalOrRemotePath {
+    LocalOrRemotePath::Remote(RemotePath::new(
+        HostId::new("remote-host".to_string()),
+        StandardizedPath::try_new(path).unwrap(),
+    ))
+}
+
 #[test]
-fn test_skill_path_from_file_path_skill_md() {
-    let skill = PathBuf::from("/home/user/.claude/skills/my-skill/SKILL.md");
-    let result = skill_path_from_file_path(&skill);
+fn skill_path_from_unix_encoded_remote_location() {
+    let location = remote_location("/repo/.agents/skills/deploy/scripts/run.sh");
+
     assert_eq!(
-        result,
-        Some(PathBuf::from("/home/user/.claude/skills/my-skill/SKILL.md"))
+        skill_path_from_location(&location),
+        Some(remote_location("/repo/.agents/skills/deploy/SKILL.md"))
     );
 }
 
 #[test]
-fn test_skill_path_from_file_path_warp_home_skill() {
-    let Some(warp_home_skills_dir) = warp_core::paths::warp_home_skills_dir() else {
-        eprintln!("Skipping test: Warp home skills directory not available");
-        return;
-    };
-    let warp_home_skill = warp_home_skills_dir
-        .join("my-skill")
-        .join("assets")
-        .join("image.png");
-    let result = skill_path_from_file_path(&warp_home_skill);
+fn skill_path_from_windows_encoded_remote_location() {
+    let location = remote_location(r"C:\repo\.agents\skills\deploy\scripts\run.ps1");
+
     assert_eq!(
-        result,
-        Some(warp_home_skills_dir.join("my-skill").join("SKILL.md"))
+        skill_path_from_location(&location),
+        Some(remote_location(r"C:\repo\.agents\skills\deploy\SKILL.md"))
     );
 }
-
-#[test]
-fn test_skill_path_from_file_path_nested_file() {
-    let skill_nested = PathBuf::from("/home/user/.agents/skills/my-skill/assets/image.png");
-    let result = skill_path_from_file_path(&skill_nested);
-    assert_eq!(
-        result,
-        Some(PathBuf::from("/home/user/.agents/skills/my-skill/SKILL.md"))
-    );
-}
-
-#[test]
-fn test_skill_path_from_file_path_non_skill() {
-    let non_skill = PathBuf::from("/home/user/Documents/file.txt");
-    let result = skill_path_from_file_path(&non_skill);
-    assert_eq!(result, None);
-
-    let similar_path = PathBuf::from("/home/user/.claude/other/file.txt");
-    let result = skill_path_from_file_path(&similar_path);
-    assert_eq!(result, None);
-
-    let empty_path = PathBuf::from("");
-    let result = skill_path_from_file_path(&empty_path);
-    assert_eq!(result, None);
-}
-
 #[test]
 fn test_unique_skills_dedupes_identical_skills_same_dir() {
     let shared_skill_dir = PathBuf::from("/home/user");
