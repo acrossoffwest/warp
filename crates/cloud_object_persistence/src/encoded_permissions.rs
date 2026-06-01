@@ -1,12 +1,11 @@
-//! Supporting types for persisting cloud objects to SQLite.
+//! Supporting helpers for persisting cloud-object permissions to SQLite.
 
 use anyhow::anyhow;
-use cloud_object_client::{CloudLinkSharing, CloudObjectGuest, ServerObjectContainer};
+use cloud_objects::auth::UserUid;
+use cloud_objects::cloud_object::{CloudLinkSharing, CloudObjectGuest, ServerObjectContainer};
+use cloud_objects::drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind};
+use cloud_objects::ids::ServerId;
 use serde::{Deserialize, Serialize};
-
-use crate::auth::UserUid;
-use crate::drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind};
-use crate::ids::ServerId;
 
 /// Decode a link-sharing setting.
 pub fn decode_link_sharing(
@@ -123,8 +122,14 @@ impl PersistedSubject {
                     Err(anyhow!("Session-sharing teams not supported"))
                 }
             },
-            // Link sharing is persisted separately in the schema.
-            Subject::AnyoneWithLink(_) => Err(anyhow!("Anyone with the link not supported")),
+            Subject::AnyoneWithLink(_) => {
+                // Link sharing is persisted separately in the schema.
+                Err(anyhow!("Anyone with the link not supported"))
+            }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "encoded_permissions_tests.rs"]
+mod tests;
