@@ -13313,8 +13313,9 @@ impl Input {
     }
 
     /// Checks whether the current input should be queued instead of executed.
-    /// Returns true (and queues the prompt) when the queue-next-prompt toggle is
-    /// on and the active conversation is still in progress.
+    /// Returns true (and queues the prompt) when the active conversation is in progress
+    /// (or blocked) AND either the queue-next-prompt toggle is on or (under
+    /// `QueuedPromptsV2`) the conversation is summarizing.
     /// Only queues when AI input is active — if the user is in shell mode the
     /// input is not queued (so e.g. `ls` still runs in the terminal).
     fn maybe_queue_input_for_in_progress_conversation(
@@ -13337,7 +13338,15 @@ impl Input {
             return false;
         };
 
-        if !QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(conversation_id) {
+        let is_summarizing = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.is_summarizing());
+        // Summarization only routes a prompt into the queued-prompts panel under QueuedPromptsV2;
+        // with the flag off, only the auto-queue toggle queues (pre-V2 behavior).
+        let queue_for_summarize = is_summarizing && FeatureFlag::QueuedPromptsV2.is_enabled();
+        if !QueuedQueryModel::as_ref(ctx).is_queue_next_prompt_enabled(conversation_id)
+            && !queue_for_summarize
+        {
             return false;
         }
 
