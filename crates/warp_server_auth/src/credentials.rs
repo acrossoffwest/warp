@@ -131,7 +131,12 @@ pub enum AuthToken {
     Bearer(String),
     /// No authentication token available (e.g. session cookie auth or test credentials).
     #[cfg_attr(
-        not(any(test, feature = "integration_tests", feature = "skip_login")),
+        not(any(
+            test,
+            feature = "integration_tests",
+            feature = "skip_login",
+            feature = "test-util"
+        )),
         allow(dead_code)
     )]
     NoAuth,
@@ -194,7 +199,9 @@ impl FirebaseToken {
                 format!("https://securetoken.googleapis.com/v1/token?key={api_key}")
             }
             FirebaseToken::Custom(_) => {
-                format!("https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={api_key}")
+                format!(
+                    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={api_key}"
+                )
             }
         }
     }

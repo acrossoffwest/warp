@@ -1,8 +1,8 @@
 use chrono::DateTime;
 
 use super::PersistedUser;
-use crate::auth::user::{FirebaseAuthTokens, PersonalObjectLimits, UserMetadata};
-use crate::auth::UserUid;
+use crate::UserUid;
+use crate::user::{FirebaseAuthTokens, PersonalObjectLimits, UserMetadata};
 
 /// Verifies that the JSON blob format as of March 6, 2026 can be deserialized correctly.
 ///
@@ -84,33 +84,26 @@ fn test_serialize_persisted_user() {
 #[test]
 #[allow(deprecated)]
 fn test_windows_user_persistence() {
-    use chrono::DateTime;
+    use chrono::Local;
     use warp_core::channel::ChannelState;
-    use warpui::{App, SingletonEntity};
+    use warpui_core::App;
     use warpui_extras::secure_storage;
 
-    use crate::auth::{AuthManager, AuthStateProvider};
-    use crate::server::datetime_ext::DateTimeExt;
-    use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-    use crate::ServerApiProvider;
-
     App::test((), |mut app| async move {
-        app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
-        app.add_singleton_model(|ctx| {
+        app.update(|ctx| {
             secure_storage::register_with_dir(
                 ChannelState::data_domain().as_str(),
                 warp_core::paths::state_dir(),
                 ctx,
             );
-            AuthManager::new_for_test(ctx)
         });
+        let local_time = Local::now();
 
         let tokens = FirebaseAuthTokens {
             id_token: String::from("This is an ID token."),
             refresh_token: String::from("This is a refresh token."),
-            expiration_time: DateTime::now() + chrono::Duration::days(365),
+            expiration_time: local_time.with_timezone(local_time.offset())
+                + chrono::Duration::days(365),
         };
         let persisted_user = PersistedUser {
             auth_tokens: tokens.clone(),
@@ -129,7 +122,7 @@ fn test_windows_user_persistence() {
             is_on_work_domain: false,
         };
 
-        AuthManager::handle(&app).update(&mut app, |_auth_manager, ctx| {
+        app.update(|ctx| {
             // Write the test user to secure storage.
             let write = persisted_user.write_to_secure_storage(ctx);
             match &write {
@@ -158,6 +151,6 @@ fn test_windows_user_persistence() {
             // Attempt to read a user back, which should fail.
             let empty_user = PersistedUser::from_secure_storage(ctx);
             assert!(empty_user.is_err());
-        })
+        });
     });
 }

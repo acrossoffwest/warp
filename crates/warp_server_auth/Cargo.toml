@@ -1,5 +1,5 @@
 [package]
-name = "cloud_objects"
+name = "warp_server_auth"
 version = "0.1.0"
 edition = "2024"
 authors.workspace = true
@@ -7,23 +7,23 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+integration_tests = []
+skip_login = []
 test-util = []
 
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
 cynic.workspace = true
-derivative.workspace = true
-itertools.workspace = true
 lasso.workspace = true
-pathfinder_geometry.workspace = true
-schemars = { version = "1", features = ["uuid1"] }
+log.workspace = true
+parking_lot.workspace = true
 serde.workspace = true
-settings_value.workspace = true
-session-sharing-protocol.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 warp_core.workspace = true
 warp_graphql.workspace = true
-warp_server_auth.workspace = true
+warp_managed_secrets.workspace = true
 warpui_core.workspace = true
+warpui_extras = { workspace = true, features = ["default"] }

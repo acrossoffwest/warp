@@ -1,30 +1,29 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
 use parking_lot::RwLock;
 use uuid::Uuid;
 use warp_core::channel::{Channel, ChannelState};
+use warp_core::report_error;
 use warp_graphql::object_permissions::OwnerType;
-use warpui::{AppContext, Entity, SingletonEntity};
+use warpui_core::{AppContext, Entity, SingletonEntity};
 
 use super::anonymous_id::get_or_create_anonymous_id;
-use super::auth_manager::user_persistence::PersistedUser;
 use super::credentials::Credentials;
-#[cfg(any(not(target_family = "wasm"), test))]
+#[cfg(any(not(target_family = "wasm"), test, feature = "test-util"))]
 use super::user::UserMetadata;
+use super::user::persistence::PersistedUser;
 use super::user::{
     AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User,
 };
-use super::{UserUid, API_KEY_PREFIX};
-use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
-use crate::report_error;
+use super::{API_KEY_PREFIX, UserUid};
 
 const ANONYMOUS_USER_NOTIFICATION_BLOCK_TIMER: Duration = Duration::days(7);
 
 /// Describes what persistence action to take based on the current auth state.
-pub(super) enum PersistAction {
+pub enum PersistAction {
     /// The user has Firebase credentials and should be persisted to secure storage.
     Persist(Box<PersistedUser>),
     /// The user has been logged out and should be removed from secure storage.
@@ -59,17 +58,36 @@ impl AuthState {
             credentials: RwLock::new(None),
         }
     }
+    #[cfg(any(
+        test,
+        feature = "integration_tests",
+        feature = "skip_login",
+        feature = "test-util"
+    ))]
+    fn test_credentials() -> Credentials {
+        #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
+        {
+            Credentials::Test
+        }
+        #[cfg(all(
+            feature = "test-util",
+            not(any(test, feature = "integration_tests", feature = "skip_login"))
+        ))]
+        {
+            Credentials::SessionCookie
+        }
+    }
 
-    #[cfg(any(test, feature = "integration_tests"))]
+    #[cfg(any(test, feature = "integration_tests", feature = "test-util"))]
     pub fn new_for_test() -> Self {
         Self {
             user: RwLock::new(Some(User::test())),
             anonymous_id: Uuid::new_v4(),
             needs_reauth: AtomicBool::new(false),
-            credentials: RwLock::new(Some(Credentials::Test)),
+            credentials: RwLock::new(Some(Self::test_credentials())),
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_logged_out_for_test() -> Self {
         Self {
             user: RwLock::new(None),
@@ -79,7 +97,7 @@ impl AuthState {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_anonymous_for_test() -> Self {
         use super::user::AnonymousUserType;
         Self {
@@ -89,7 +107,7 @@ impl AuthState {
             })),
             anonymous_id: Uuid::new_v4(),
             needs_reauth: AtomicBool::new(false),
-            credentials: RwLock::new(Some(Credentials::Test)),
+            credentials: RwLock::new(Some(Self::test_credentials())),
         }
     }
 
@@ -104,8 +122,13 @@ impl AuthState {
 
         if Self::should_use_test_user() {
             state.set_user(Some(User::test()));
-            #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
-            state.set_credentials(Some(Credentials::Test));
+            #[cfg(any(
+                test,
+                feature = "integration_tests",
+                feature = "skip_login",
+                feature = "test-util"
+            ))]
+            state.set_credentials(Some(Self::test_credentials()));
             return state;
         }
 
@@ -154,11 +177,12 @@ impl AuthState {
     }
 
     fn should_use_test_user() -> bool {
-        cfg!(any(test, feature = "skip_login")) || ChannelState::channel() == Channel::Integration
+        cfg!(any(test, feature = "skip_login", feature = "test-util"))
+            || ChannelState::channel() == Channel::Integration
     }
 
     /// Determines the appropriate persistence action based on the current auth state.
-    pub(super) fn persist_action(&self) -> PersistAction {
+    pub fn persist_action(&self) -> PersistAction {
         let user = self.user.read().clone();
         let credentials = self.credentials.read().clone();
 
@@ -223,7 +247,7 @@ impl AuthState {
     /// Sets the user. This should only be called by the AuthManager, to ensure
     /// side-effects are handled properly (e.g. notifying other models, persisting
     /// the user to secure storage, etc.).
-    pub(super) fn set_user(&self, user: Option<User>) {
+    pub fn set_user(&self, user: Option<User>) {
         *self.user.write() = user;
     }
 
@@ -233,15 +257,16 @@ impl AuthState {
     }
 
     /// Sets the credentials. Should only be called within the auth module.
-    pub(super) fn set_credentials(&self, credentials: Option<Credentials>) {
+    pub fn set_credentials(&self, credentials: Option<Credentials>) {
         *self.credentials.write() = credentials;
     }
+
     /// Applies auth data received by the remote server daemon handshake.
     ///
     /// Empty values are authoritative: an empty token clears bearer credentials, and an empty user
     /// ID clears the daemon user identity.
-    #[cfg(any(not(target_family = "wasm"), test))]
-    pub(crate) fn apply_remote_server_auth_context(
+    #[cfg(any(not(target_family = "wasm"), test, feature = "test-util"))]
+    pub fn apply_remote_server_auth_context(
         &self,
         auth_token: String,
         user_id: String,
@@ -251,8 +276,9 @@ impl AuthState {
         self.set_remote_server_user(user_id, user_email);
     }
 
-    #[cfg(any(not(target_family = "wasm"), test))]
-    pub(crate) fn set_remote_server_bearer_token(&self, auth_token: String) {
+    /// Applies bearer-token credentials received from the remote server daemon.
+    #[cfg(any(not(target_family = "wasm"), test, feature = "test-util"))]
+    pub fn set_remote_server_bearer_token(&self, auth_token: String) {
         if auth_token.is_empty() {
             self.set_credentials(None);
             return;
@@ -260,7 +286,7 @@ impl AuthState {
         self.set_credentials(Some(Credentials::Bearer(auth_token)));
     }
 
-    #[cfg(any(not(target_family = "wasm"), test))]
+    #[cfg(any(not(target_family = "wasm"), test, feature = "test-util"))]
     fn set_remote_server_user(&self, user_id: String, user_email: String) {
         let mut user = self.user.write();
         if user_id.is_empty() {
@@ -296,7 +322,7 @@ impl AuthState {
 
     /// Updates the Firebase auth tokens within the current credentials.
     /// Reports an error if the current credentials are not Firebase.
-    pub(crate) fn update_firebase_tokens(&self, new_auth_tokens: FirebaseAuthTokens) {
+    pub fn update_firebase_tokens(&self, new_auth_tokens: FirebaseAuthTokens) {
         let mut write_lock = self.credentials.write();
         if let Some(Credentials::Firebase(tokens)) = write_lock.as_mut() {
             *tokens = new_auth_tokens;
@@ -404,32 +430,6 @@ impl AuthState {
         })
     }
 
-    /// Returns whether or not the anonymous user is past any of their Warp Drive object limits.
-    pub fn is_anonymous_user_past_object_limit(
-        &self,
-        object_type: ObjectType,
-        num_objects: usize,
-    ) -> Option<bool> {
-        self.user.read().as_ref().map(|user| {
-            if !self.is_anonymous_user_feature_gated().unwrap_or_default() {
-                return false;
-            }
-
-            if let Some(limits) = user.personal_object_limits() {
-                match object_type {
-                    ObjectType::Notebook => num_objects > limits.notebook_limit,
-                    ObjectType::Workflow => num_objects > limits.workflow_limit,
-                    ObjectType::GenericStringObject(GenericStringObjectFormat::Json(
-                        JsonObjectType::EnvVarCollection,
-                    )) => num_objects > limits.env_var_limit,
-                    _ => false,
-                }
-            } else {
-                false
-            }
-        })
-    }
-
     /// Returns the user's photo URL from Firebase,
     /// typically acquired from linking a provider like Google/GitHub.
     pub fn user_photo_url(&self) -> Option<String> {
@@ -490,7 +490,7 @@ impl AuthState {
 
     /// Sets whether a reauth is required for the current user.
     /// Returns whether or not the reauth state was changed from false to true.
-    pub(super) fn set_needs_reauth(&self, new_needs_reauth: bool) -> bool {
+    pub fn set_needs_reauth(&self, new_needs_reauth: bool) -> bool {
         let prev_needs_reauth = self.needs_reauth.swap(new_needs_reauth, Ordering::Relaxed);
         !prev_needs_reauth && new_needs_reauth
     }
@@ -571,7 +571,7 @@ impl AuthStateProvider {
         Self { auth_state }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test() -> Self {
         Self {
             auth_state: Arc::new(AuthState::new_for_test()),
@@ -582,14 +582,14 @@ impl AuthStateProvider {
     /// no credentials). Used by unit tests that need to exercise code paths
     /// gated on `AuthState::user_id()` / `UserWorkspaces::personal_drive()`
     /// returning `None`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_logged_out_for_test() -> Self {
         Self {
             auth_state: Arc::new(AuthState::new_logged_out_for_test()),
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_anonymous_for_test() -> Self {
         Self {
             auth_state: Arc::new(AuthState::new_anonymous_for_test()),

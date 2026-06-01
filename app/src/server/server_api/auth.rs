@@ -262,7 +262,7 @@ impl ServerApi {
                 Ok(AuthToken::Firebase(auth_tokens.id_token))
             }
             Credentials::SessionCookie => Ok(AuthToken::NoAuth),
-            #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
+            #[cfg(any(feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => Ok(AuthToken::NoAuth),
         }
     }

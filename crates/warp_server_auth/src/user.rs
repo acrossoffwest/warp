@@ -1,12 +1,13 @@
-use anyhow::{anyhow, Result};
-use chrono::{DateTime, FixedOffset};
+use anyhow::{Result, anyhow};
+use chrono::{DateTime, FixedOffset, Local};
 use serde::{Deserialize, Serialize};
 use warp_graphql::queries::get_user::FirebaseProfile;
 use warp_graphql::scalars::time::ServerTimestamp;
-pub use warp_server_client::auth::{TEST_USER_EMAIL, TEST_USER_UID};
 
 use super::UserUid;
-use crate::server::datetime_ext::DateTimeExt;
+pub use super::user_uid::{TEST_USER_EMAIL, TEST_USER_UID};
+
+pub mod persistence;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AnonymousUserType {
@@ -141,9 +142,10 @@ impl FirebaseAuthTokens {
         refresh_token: String,
         expires_in: String,
     ) -> Result<Self, anyhow::Error> {
+        let local_time = Local::now();
         Ok(Self {
             id_token,
-            expiration_time: chrono::DateTime::now()
+            expiration_time: local_time.with_timezone(local_time.offset())
                 + chrono::Duration::seconds(
                     expires_in.parse::<i64>().map_err(anyhow::Error::from)?,
                 ),
