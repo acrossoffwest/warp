@@ -57,6 +57,13 @@ impl QueuedQuery {
     pub fn origin(&self) -> QueuedQueryOrigin {
         self.origin
     }
+
+    /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
+    /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code
+    /// removes it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
+    pub fn is_locked(&self) -> bool {
+        matches!(self.origin, QueuedQueryOrigin::InitialCloudMode)
+    }
 }
 
 /// What the auto-fire drain should do with a popped row.
@@ -250,15 +257,18 @@ impl QueuedQueryModel {
         query_id
     }
 
-    /// Pops the first row in `conversation_id`'s queue and returns it. Used by the error/cancel
-    /// drain path where the caller restores the popped text to the input editor.
+    /// Pops the first row in `conversation_id`'s queue and returns it.
+    /// Used by the non-clean drain path (Error / Cancelled) to restore a single popped
+    /// prompt to the input editor. No-ops when the head is locked
+    /// ([`QueuedQuery::is_locked`]) so a status-transition arriving before the lifecycle
+    /// cleanup events cannot clobber the locked initial Cloud Mode row.
     pub fn pop_front(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<QueuedQuery> {
         let state = self.queues.get_mut(&conversation_id)?;
-        if state.queue.is_empty() {
+        if state.queue.first()?.is_locked() {
             return None;
         }
         let popped = state.queue.remove(0);
@@ -272,9 +282,10 @@ impl QueuedQueryModel {
         Some(popped)
     }
 
-    /// Auto-fire drain entry point for `conversation_id`. Pops the first row and tells the caller
-    /// whether to submit it normally or treat it as a popped edit-mode row (per the spec, the
-    /// row's last-committed text is restored to the input box).
+    /// Auto-fire drain entry point for `conversation_id`.
+    /// Returns `None` for empty queues or when the head is locked
+    /// ([`QueuedQuery::is_locked`]); otherwise pops the first row and returns whether
+    /// the caller should submit it normally or treat it as a popped edit-mode row.
     pub fn pop_for_autofire(
         &mut self,
         conversation_id: AIConversationId,
@@ -282,6 +293,9 @@ impl QueuedQueryModel {
     ) -> Option<AutofireAction> {
         let state = self.queues.get_mut(&conversation_id)?;
         let first = state.queue.first()?;
+        if first.is_locked() {
+            return None;
+        }
         let first_in_edit_mode = state.editing == Some(first.id);
         let popped = state.queue.remove(0);
         if first_in_edit_mode {
@@ -299,7 +313,10 @@ impl QueuedQueryModel {
         })
     }
 
-    /// Removes a specific row by id within `conversation_id`'s queue, if present.
+    /// Removes a specific row by id within `conversation_id`'s queue, if present. Returns the
+    /// removed row. No-ops when the target row is locked ([`QueuedQuery::is_locked`]); the
+    /// locked initial Cloud Mode row is only removable via
+    /// [`Self::remove_initial_cloud_mode_row`].
     pub fn remove_by_id(
         &mut self,
         conversation_id: AIConversationId,
@@ -308,6 +325,9 @@ impl QueuedQueryModel {
     ) -> Option<QueuedQuery> {
         let state = self.queues.get_mut(&conversation_id)?;
         let idx = state.queue.iter().position(|q| q.id == query_id)?;
+        if state.queue[idx].is_locked() {
+            return None;
+        }
         let removed = state.queue.remove(idx);
         if state.editing == Some(query_id) {
             state.editing = None;
@@ -319,9 +339,37 @@ impl QueuedQueryModel {
         Some(removed)
     }
 
+    /// Removes the locked initial Cloud Mode row from `conversation_id`'s queue, if it is still
+    /// at the queue head.
+    pub fn remove_initial_cloud_mode_row(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<QueuedQuery> {
+        let state = self.queues.get_mut(&conversation_id)?;
+        if !state
+            .queue
+            .first()
+            .is_some_and(|row| row.origin == QueuedQueryOrigin::InitialCloudMode)
+        {
+            return None;
+        }
+        let removed = state.queue.remove(0);
+        if state.editing == Some(removed.id) {
+            state.editing = None;
+        }
+        ctx.emit(QueuedQueryEvent::Removed {
+            conversation_id,
+            query_id: removed.id,
+        });
+        Some(removed)
+    }
+
     /// Moves the row identified by `source_id` to position `target_index` within
     /// `conversation_id`'s queue. `target_index` is interpreted as the index in the post-removal
-    /// list and is clamped to the queue length.
+    /// list and is clamped to the queue length. No-ops when the source row is locked
+    /// ([`QueuedQuery::is_locked`]) or when the move would displace a locked row off the head of
+    /// the queue.
     pub fn reorder(
         &mut self,
         conversation_id: AIConversationId,
@@ -335,6 +383,10 @@ impl QueuedQueryModel {
         let Some(source_idx) = state.queue.iter().position(|q| q.id == source_id) else {
             return;
         };
+        let head_is_locked = state.queue.first().is_some_and(|row| row.is_locked());
+        if state.queue[source_idx].is_locked() || (target_index == 0 && head_is_locked) {
+            return;
+        }
         let row = state.queue.remove(source_idx);
         let clamped = target_index.min(state.queue.len());
         state.queue.insert(clamped, row);
@@ -342,7 +394,8 @@ impl QueuedQueryModel {
     }
 
     /// Enters edit mode for `query_id` in `conversation_id`'s queue. If another row was being
-    /// edited, that edit is cancelled (its text is unchanged, per the spec).
+    /// edited, that edit is cancelled (its text is unchanged, per the spec). No-ops when the
+    /// target row is locked ([`QueuedQuery::is_locked`]).
     pub fn enter_edit_mode(
         &mut self,
         conversation_id: AIConversationId,
@@ -352,7 +405,11 @@ impl QueuedQueryModel {
         let Some(state) = self.queues.get_mut(&conversation_id) else {
             return;
         };
-        if !state.queue.iter().any(|q| q.id == query_id) {
+        if !state
+            .queue
+            .iter()
+            .any(|q| q.id == query_id && !q.is_locked())
+        {
             return;
         }
         let prev_edit = state.editing.replace(query_id);
