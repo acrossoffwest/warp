@@ -426,7 +426,7 @@ impl LocalRepoMetadataModel {
             ));
         }
 
-        // Register this path with the watcher if we have one
+        // Register this path with the watcher if we have one.
         #[cfg(feature = "local_fs")]
         {
             if let Some(ref watcher) = self.watcher {
