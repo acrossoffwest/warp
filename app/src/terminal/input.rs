@@ -2561,8 +2561,29 @@ impl Input {
                 AgentInputFooterEvent::OpenPluginInstructionsPane(agent, kind) => {
                     ctx.emit(Event::OpenPluginInstructionsPane(*agent, *kind));
                 }
-                AgentInputFooterEvent::OpenHandoffPane => {
-                    me.activate_cloud_handoff_compose(HandoffEntryPoint::FooterChip, ctx);
+                AgentInputFooterEvent::HandoffChipClicked => {
+                    // Auto-handoff only when the input buffer is empty and the
+                    // source conversation has content. Otherwise enter `&`
+                    // compose mode so any in-flight prompt is preserved and
+                    // the user can refine before forking.
+                    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+                    let auto_handoff = me.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty()
+                        && me.source_conversation_has_content(ctx);
+                    #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
+                    let auto_handoff = false;
+
+                    if auto_handoff {
+                        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+                        ctx.dispatch_typed_action_deferred(
+                            WorkspaceAction::OpenLocalToCloudHandoffPane {
+                                launch: None,
+                                environment_id: None,
+                                entry_point: HandoffEntryPoint::FooterChip,
+                            },
+                        );
+                    } else {
+                        me.activate_cloud_handoff_compose(HandoffEntryPoint::FooterChip, ctx);
+                    }
                 }
             }
         });
@@ -4072,6 +4093,16 @@ impl Input {
         }
     }
 
+    /// Source-content guardrail shared by the three local-to-cloud handoff entry
+    /// points (footer chip, `&` compose, `/handoff`): true when this terminal's
+    /// active source conversation has at least one exchange to hand off.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn source_conversation_has_content(&self, ctx: &AppContext) -> bool {
+        BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.terminal_view_id)
+            .is_some_and(|c| !c.is_empty())
+    }
+
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn maybe_launch_cloud_handoff_request(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         use crate::cloud_object::CloudObjectLookup as _;
@@ -4085,7 +4116,29 @@ impl Input {
         }
 
         let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
+        // Empty buffer + source conversation with content launches an immediate empty-prompt handoff.
         if prompt.is_empty() {
+            if !self.source_conversation_has_content(ctx) {
+                return true;
+            }
+
+            if CloudAmbientAgentEnvironment::get_all(ctx).is_empty() {
+                ctx.emit(Event::OpenHandoffEnvironmentCreationModal);
+                return true;
+            }
+
+            let environment_id = self
+                .handoff_compose_state
+                .as_ref(ctx)
+                .selected_environment_id()
+                .cloned();
+            let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
+            self.exit_cloud_handoff_compose_and_clear(ctx);
+            ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
+                launch: None,
+                environment_id,
+                entry_point,
+            });
             return true;
         }
 
