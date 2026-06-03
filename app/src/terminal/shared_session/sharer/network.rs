@@ -44,6 +44,7 @@ use {
 
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
+use crate::server::iap::IapManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEvent, Heartbeat};
@@ -627,6 +628,11 @@ impl Network {
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
+        let iap_headers: Vec<(&str, String)> = IapManager::as_ref(ctx)
+            .iap_state()
+            .and_then(|state| state.proxy_auth_header())
+            .into_iter()
+            .collect();
 
         // Get the selected model before spawning the async task
         let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
@@ -650,7 +656,9 @@ impl Network {
                         .ok()
                         .and_then(|token| token.bearer_token()),
                 };
-                let socket = WebSocket::connect(create_endpoint, None).await?;
+                let socket =
+                    WebSocket::connect_with_headers(&create_endpoint, None::<&str>, iap_headers)
+                        .await?;
                 log::info!("Connected to session sharing server; preparing initialization");
                 anyhow::Ok((socket.split().await, user_id))
             },
@@ -693,6 +701,9 @@ impl Network {
                 }
                 Err(e) => {
                     network.log_diagnostic("initial_websocket_connect_failed", "outcome=transport_error");
+                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.check_ws_connect_error(&e, ctx);
+                    });
                     let cause = Arc::new(e.context("Failed to create shared session"));
                     report_error!(&*cause);
                     ctx.emit(NetworkEvent::FailedToCreateSharedSession {
@@ -733,6 +744,7 @@ impl Network {
 
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        let iap_state = IapManager::as_ref(ctx).iap_state();
         let (source_type, source_task_id) = self.diagnostic_source_context();
         let source_type = source_type.to_string();
         let source_task_id = source_task_id.map(str::to_owned);
@@ -745,8 +757,21 @@ impl Network {
                     let reconnect_endpoint = reconnect_endpoint.clone();
                     let auth_state = auth_state.clone();
                     let auth_client = auth_client.clone();
+                    let iap_state = iap_state.clone();
                     async move {
-                        let socket = WebSocket::connect(reconnect_endpoint, None).await?;
+                        // Re-read the IAP header each attempt so a refresh that
+                        // landed since the last try is picked up (staging only).
+                        let iap_headers: Vec<(&str, String)> = iap_state
+                            .as_ref()
+                            .and_then(|state| state.proxy_auth_header())
+                            .into_iter()
+                            .collect();
+                        let socket = WebSocket::connect_with_headers(
+                            &reconnect_endpoint,
+                            None::<&str>,
+                            iap_headers,
+                        )
+                        .await?;
                         let user_id = UserID {
                             anonymous_id: auth_state.anonymous_id(),
                             access_token: auth_client
@@ -797,6 +822,9 @@ impl Network {
                             "reconnect_attempt_failed",
                             "outcome=retry_pending",
                         );
+                        IapManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.check_ws_connect_error(&e, ctx);
+                        });
                         log::warn!("Failed to reconnect to shared session, will retry: {e}");
                     }
                     RequestState::RequestFailed(e) => {
