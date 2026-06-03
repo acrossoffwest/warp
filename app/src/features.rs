@@ -469,6 +469,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SoloUserByok,
         #[cfg(feature = "billing_and_usage_page_v2")]
         FeatureFlag::BillingAndUsagePageV2,
+        #[cfg(feature = "gpt_configurable_context_window")]
+        FeatureFlag::GPTConfigurableContextWindow,
         #[cfg(feature = "skip_firebase_anonymous_user")]
         FeatureFlag::SkipFirebaseAnonymousUser,
         #[cfg(feature = "hoa_onboarding_flow")]
@@ -485,8 +487,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudModeSetupV2,
         #[cfg(feature = "cloud_mode_input_v2")]
         FeatureFlag::CloudModeInputV2,
-        #[cfg(feature = "configurable_context_window")]
-        FeatureFlag::ConfigurableContextWindow,
         #[cfg(feature = "handoff_cloud_cloud")]
         FeatureFlag::HandoffCloudCloud,
         #[cfg(feature = "git_credential_refresh")]

@@ -850,11 +850,6 @@ pub enum FeatureFlag {
 
     CloudModeInputV2,
 
-    /// Gates the user-configurable context window slider in AI settings and
-    /// the execution profile editor. When disabled, the slider is hidden and
-    /// `base_model_context_window_limit` is not sent on outbound requests, so
-    /// the server falls back to its default.
-    ConfigurableContextWindow,
     /// Enables continuing cloud mode conversations in the cloud after an execution ends.
     HandoffCloudCloud,
 
@@ -876,6 +871,8 @@ pub enum FeatureFlag {
 
     /// Gates the v2 billing and usage page redesign.
     BillingAndUsagePageV2,
+    /// Enables configurable expanded context windows for eligible GPT models.
+    GPTConfigurableContextWindow,
 
     /// Replaces the raw harness CLI command with a styled header showing CLI name + status icon.
     HarnessSessionHeader,
@@ -949,6 +946,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
+    FeatureFlag::OrchestrationViewerStreamer,
+    FeatureFlag::GPTConfigurableContextWindow,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

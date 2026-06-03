@@ -661,7 +661,6 @@ default = [
     "settings_file",
     "directory_tab_colors",
     "git_credential_refresh",
-    "configurable_context_window",
     "oz_handoff",
     "handoff_local_cloud",
     "orchestration_v2",
@@ -991,6 +990,7 @@ skip_firebase_anonymous_user = []
 custom_inference_endpoints = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []
+gpt_configurable_context_window = []
 configurable_toolbar = []
 warpify_footer = []
 hoa_onboarding_flow = []
@@ -999,7 +999,6 @@ hoa_remote_control = []
 codex_notifications = []
 cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
-configurable_context_window = []
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 
