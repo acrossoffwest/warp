@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;
 
+use warp_cli::agent::Harness;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
 
@@ -327,6 +328,85 @@ fn cloud_setup_enter_queues_followup_input_when_v2_is_enabled() {
             let queued_rows = queue_texts(view, ctx);
             assert!(queued_rows.iter().any(|(text, origin)| {
                 text == "queue this next" && *origin == QueuedQueryOrigin::AutoQueueToggle
+            }));
+            assert!(view.input.as_ref(ctx).buffer_text(ctx).is_empty());
+        });
+    });
+}
+
+#[test]
+fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
+    // Third-party (non-Oz) harness runs don't support prompt queueing, so an enter during
+    // setup must not queue the follow-up. It falls through to being blocked, leaving the
+    // typed text in the buffer (same observable outcome as the V2-disabled path).
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+        let _agent_harness = FeatureFlag::AgentHarness.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+            view.ambient_agent_view_model()
+                .expect("cloud terminal should have an ambient model")
+                .update(ctx, |model, ctx| {
+                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.set_harness(Harness::Claude, ctx);
+                });
+
+            view.input.update(ctx, |input, ctx| {
+                input.replace_buffer_content("do not queue this", ctx);
+                input.input_enter(ctx);
+            });
+
+            assert!(QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .is_empty());
+            assert_eq!(view.input.as_ref(ctx).buffer_text(ctx), "do not queue this");
+        });
+    });
+}
+
+#[test]
+fn cloud_setup_enter_queues_followup_while_setup_commands_run() {
+    // Once the cloud session starts, the run is `AgentRunning` while environment setup
+    // commands execute (still pre-first-exchange). Submitting in this window must queue the
+    // follow-up, not send it as a live prompt the sharer would drop.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let task_id = AmbientAgentTaskId::from_str("123e4567-e89b-12d3-a456-426614174000")
+            .expect("valid task id");
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            enter_cloud_setup_with_conversation(view, ctx);
+            view.ambient_agent_view_model()
+                .expect("cloud terminal should have an ambient model")
+                .update(ctx, |model, ctx| {
+                    // Session has started: the run moves to AgentRunning.
+                    model.enter_viewing_existing_session(task_id, ctx);
+                });
+            // Environment setup commands are running (pre-first-exchange).
+            view.model
+                .lock()
+                .block_list_mut()
+                .set_is_executing_oz_environment_startup_commands(true);
+
+            view.input.update(ctx, |input, ctx| {
+                input.replace_buffer_content("queue during setup", ctx);
+                input.input_enter(ctx);
+            });
+
+            let queued_rows = queue_texts(view, ctx);
+            assert!(queued_rows.iter().any(|(text, origin)| {
+                text == "queue during setup" && *origin == QueuedQueryOrigin::AutoQueueToggle
             }));
             assert!(view.input.as_ref(ctx).buffer_text(ctx).is_empty());
         });
