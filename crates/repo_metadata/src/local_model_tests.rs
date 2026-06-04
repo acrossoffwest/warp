@@ -373,7 +373,7 @@ fn test_lazy_loaded_path_registrations_are_refcounted() {
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_lazy_loaded_path_builds_standing_rule_results_below_shallow_tree() {
+fn test_lazy_loaded_path_does_not_build_standing_rule_results_below_shallow_tree() {
     VirtualFS::test("lazy_loaded_path_standing_rules", |dirs, mut vfs| {
         vfs.mkdir("workspace/src/deep")
             .with_files(vec![Stub::FileWithContent(
@@ -396,7 +396,7 @@ fn test_lazy_loaded_path_builds_standing_rule_results_below_shallow_tree() {
                 let results = model
                     .standing_query_results(&workspace_path)
                     .expect("lazy indexed paths should retain standing results");
-                assert!(results
+                assert!(!results
                     .project_rules()
                     .any(|content| content.path == rule_path));
             });

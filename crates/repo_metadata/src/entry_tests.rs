@@ -467,7 +467,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
     );
 }
 #[test]
-fn standing_queries_report_rules_below_an_unloaded_shallow_directory() {
+fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
     virtual_fs::VirtualFS::test("standing_queries_report_shallow_rules", |dirs, mut vfs| {
         vfs.mkdir("repo/src/deep")
             .with_files(vec![virtual_fs::Stub::FileWithContent(
@@ -504,7 +504,7 @@ fn standing_queries_report_rules_below_an_unloaded_shallow_directory() {
             &repo.join("src/deep/WARP.md"),
         )
         .unwrap();
-        assert!(results
+        assert!(!results
             .project_rules()
             .any(|content| content.path == rule_path));
     });

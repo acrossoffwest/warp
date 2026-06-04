@@ -20,8 +20,6 @@ const MAX_FILE_SIZE: usize = 3 * 1000 * 1000;
 
 /// Maximum number of files to load when lazy-loading a directory
 pub const LAZY_LOAD_FILE_LIMIT: usize = 5000;
-/// Maximum relative depth to inspect below a lazy node for standing query matches.
-const STANDING_QUERY_MAX_DEPTH: usize = 3;
 
 #[derive(Debug, Error)]
 pub enum BuildTreeError {
@@ -103,45 +101,6 @@ impl Entry {
         match self {
             Self::File(file) => &file.path,
             Self::Directory(directory) => &directory.path,
-        }
-    }
-    fn collect_standing_descendants(
-        directory: &Path,
-        current_depth: usize,
-        state: &mut StandingQueryBuildState<'_>,
-    ) {
-        if current_depth >= STANDING_QUERY_MAX_DEPTH {
-            return;
-        }
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_symlink() && path.is_dir() {
-                state
-                    .results
-                    .record_followed_project_skill_directory(&path, state.definitions);
-                continue;
-            }
-            let path = if path.is_symlink() {
-                path
-            } else {
-                match dunce::canonicalize(path) {
-                    Ok(path) => path,
-                    Err(_) => continue,
-                }
-            };
-            if is_git_internal_path(&path) {
-                continue;
-            }
-            let is_directory = path.is_dir();
-            state
-                .results
-                .record_path(&path, is_directory, state.definitions);
-            if is_directory {
-                Self::collect_standing_descendants(&path, current_depth + 1, state);
-            }
         }
     }
 
@@ -317,11 +276,6 @@ impl Entry {
                 Ok(Self::File(metadata))
             }
             EvaluatedEntry::Directory { ignored, lazy } => {
-                if lazy {
-                    if let Some(state) = standing_queries.as_deref_mut() {
-                        Self::collect_standing_descendants(&root_path, 0, state);
-                    }
-                }
                 nodes.push(Some(NodeBuilder::Dir {
                     path: root_path.clone(),
                     ignored,
@@ -359,9 +313,6 @@ impl Entry {
                         }
                     };
                     if !should_expand {
-                        if let Some(state) = standing_queries.as_deref_mut() {
-                            Self::collect_standing_descendants(&job.path, 0, state);
-                        }
                         continue;
                     }
 
@@ -451,11 +402,7 @@ impl Entry {
                                 // without a matching force-included path) stay
                                 // unloaded. Everything else is queued for
                                 // expansion, subject to the budget gate above.
-                                if lazy {
-                                    if let Some(state) = standing_queries.as_deref_mut() {
-                                        Self::collect_standing_descendants(&child_path, 0, state);
-                                    }
-                                } else {
+                                if !lazy {
                                     queue.push_back(DirJob {
                                         index: child_index,
                                         path: child_path,
