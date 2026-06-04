@@ -13,11 +13,15 @@ use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
 
+use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
+
 /// Maximum file size allowed for treesitter parsing (3MB).
 const MAX_FILE_SIZE: usize = 3 * 1000 * 1000;
 
 /// Maximum number of files to load when lazy-loading a directory
 pub const LAZY_LOAD_FILE_LIMIT: usize = 5000;
+/// Maximum relative depth to inspect below a lazy node for standing query matches.
+const STANDING_QUERY_MAX_DEPTH: usize = 3;
 
 #[derive(Debug, Error)]
 pub enum BuildTreeError {
@@ -76,6 +80,10 @@ pub(crate) struct BuildTreeOptions<'a> {
     pub force_included_paths: &'a [PathBuf],
     pub budget_exceeded_behavior: BudgetExceededBehavior,
 }
+struct StandingQueryBuildState<'a> {
+    results: &'a mut StandingQueryResults,
+    definitions: &'a StandingQueryDefinitions,
+}
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct FileId(usize);
@@ -95,6 +103,42 @@ impl Entry {
         match self {
             Self::File(file) => &file.path,
             Self::Directory(directory) => &directory.path,
+        }
+    }
+    fn collect_standing_descendants(
+        directory: &Path,
+        current_depth: usize,
+        state: &mut StandingQueryBuildState<'_>,
+    ) {
+        if current_depth >= STANDING_QUERY_MAX_DEPTH {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_symlink() && path.is_dir() {
+                continue;
+            }
+            let path = if path.is_symlink() {
+                path
+            } else {
+                match dunce::canonicalize(path) {
+                    Ok(path) => path,
+                    Err(_) => continue,
+                }
+            };
+            if is_git_internal_path(&path) {
+                continue;
+            }
+            let is_directory = path.is_dir();
+            state
+                .results
+                .record_path(&path, is_directory, state.definitions);
+            if is_directory {
+                Self::collect_standing_descendants(&path, current_depth + 1, state);
+            }
         }
     }
 
@@ -141,12 +185,38 @@ impl Entry {
                 budget_exceeded_behavior,
             },
             false,
+            None,
+        )
+    }
+    /// Builds the materialized tree and standing results during the same filesystem traversal.
+    pub(crate) fn build_tree_with_standing_queries(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        options: BuildTreeOptions<'_>,
+        standing_results: &mut StandingQueryResults,
+        definitions: &StandingQueryDefinitions,
+    ) -> Result<Self, BuildTreeError> {
+        let mut standing_queries = StandingQueryBuildState {
+            results: standing_results,
+            definitions,
+        };
+        Self::build_tree_with_force_included_paths_and_ancestor(
+            path,
+            files,
+            gitignores,
+            remaining_file_quota,
+            options,
+            false,
+            Some(&mut standing_queries),
         )
     }
 
     /// Builds a tree of entries from a given path, eagerly loading any path that
     /// matches one of the supplied force-included paths instead of leaving it
     /// lazy (see [`BuildTreeOptions::force_included_paths`]).
+    #[cfg(test)]
     pub(crate) fn build_tree_with_force_included_paths(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
@@ -161,6 +231,7 @@ impl Entry {
             remaining_file_quota,
             options,
             false,
+            None,
         )
     }
 
@@ -188,17 +259,19 @@ impl Entry {
                 budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
             },
             ancestor_is_ignored,
+            None,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_tree_with_force_included_paths_and_ancestor(
+    fn build_tree_with_force_included_paths_and_ancestor(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
         ancestor_is_ignored: bool,
+        mut standing_queries: Option<&mut StandingQueryBuildState<'_>>,
     ) -> Result<Self, BuildTreeError> {
         let root_path: PathBuf = path.into();
 
@@ -218,6 +291,11 @@ impl Entry {
         // Classify the root. Unlike child entries (which are simply omitted when
         // ignored/symlinked), a classification failure at the root propagates to
         // the caller, preserving existing error behavior.
+        if let Some(state) = standing_queries.as_deref_mut() {
+            state
+                .results
+                .record_path(&root_path, root_path.is_dir(), state.definitions);
+        }
         match evaluate_entry(
             &root_path,
             gitignores,
@@ -236,6 +314,11 @@ impl Entry {
                 Ok(Self::File(metadata))
             }
             EvaluatedEntry::Directory { ignored, lazy } => {
+                if lazy {
+                    if let Some(state) = standing_queries.as_deref_mut() {
+                        Self::collect_standing_descendants(&root_path, 0, state);
+                    }
+                }
                 nodes.push(Some(NodeBuilder::Dir {
                     path: root_path.clone(),
                     ignored,
@@ -273,6 +356,9 @@ impl Entry {
                         }
                     };
                     if !should_expand {
+                        if let Some(state) = standing_queries.as_deref_mut() {
+                            Self::collect_standing_descendants(&job.path, 0, state);
+                        }
                         continue;
                     }
 
@@ -315,6 +401,13 @@ impl Entry {
                         let Some(child_path) = canonical_path else {
                             continue;
                         };
+                        if let Some(state) = standing_queries.as_deref_mut() {
+                            state.results.record_path(
+                                &child_path,
+                                child_path.is_dir(),
+                                state.definitions,
+                            );
+                        }
 
                         match evaluate_entry(
                             &child_path,
@@ -349,7 +442,11 @@ impl Entry {
                                 // without a matching force-included path) stay
                                 // unloaded. Everything else is queued for
                                 // expansion, subject to the budget gate above.
-                                if !lazy {
+                                if lazy {
+                                    if let Some(state) = standing_queries.as_deref_mut() {
+                                        Self::collect_standing_descendants(&child_path, 0, state);
+                                    }
+                                } else {
                                     queue.push_back(DirJob {
                                         index: child_index,
                                         path: child_path,
