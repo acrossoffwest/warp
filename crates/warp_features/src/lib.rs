@@ -692,17 +692,14 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// Renders a horizontal pill bar in the agent view pane header showing the
-    /// orchestrator agent and all of its child agents, with click-to-switch
-    /// behavior between siblings.
-    OrchestrationPillBar,
-
-    /// Enables the orchestration pill bar in shared session viewers (web and
-    /// native). When enabled, viewing a shared session that used orchestration
-    /// shows a pill bar above the agent view header with the orchestrator and
-    /// each child agent. Clicking a child pill joins the child's shared session
-    /// and switches the view to its transcript.
-    OrchestrationViewerPillBar,
+    /// Gates client-side support for the `orchestrate` tool, which batches
+    /// multiple child agents into a single tool call with an inline
+    /// confirmation card. When enabled, the client advertises
+    /// `RequestSettings.SupportsOrchestrate = true` and the server's
+    /// orchestrate tool replaces `start_agent` / `start_agent_v2` for
+    /// orchestration-capable conversations. Layered on top of
+    /// `OrchestrationV2`; has no effect when v2 is off.
+    RunAgentsTool,
 
     /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
     /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new

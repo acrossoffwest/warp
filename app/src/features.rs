@@ -415,10 +415,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "orchestration_pill_bar")]
-        FeatureFlag::OrchestrationPillBar,
-        #[cfg(feature = "orchestration_viewer_pill_bar")]
-        FeatureFlag::OrchestrationViewerPillBar,
+        #[cfg(feature = "run_agents_tool")]
+        FeatureFlag::RunAgentsTool,
         #[cfg(feature = "orchestration_viewer_streamer")]
         FeatureFlag::OrchestrationViewerStreamer,
         #[cfg(feature = "pending_user_query_indicator")]
