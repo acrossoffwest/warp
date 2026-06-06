@@ -264,6 +264,7 @@ rmcp.workspace = true
 warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
+local_control.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true
@@ -971,6 +972,7 @@ vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
 grouped_tabs = []
+warp_control_cli = []
 agent_harness = []
 oz_handoff = []
 handoff_local_cloud = []
