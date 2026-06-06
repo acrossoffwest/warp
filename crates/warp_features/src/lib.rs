@@ -708,6 +708,9 @@ pub enum FeatureFlag {
     /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
     OrchestrationViewerStreamer,
 
+    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
+    OwnerOrchestrationAncestorStreamer,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -938,6 +941,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::OwnerOrchestrationAncestorStreamer,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
