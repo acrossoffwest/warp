@@ -210,7 +210,8 @@ impl EventLoop {
                                             ctx,
                                         )
                                     };
-                                if skip_clear_during_setup {
+                                if skip_clear_during_setup || view.has_queued_command_in_flight(ctx)
+                                {
                                     return;
                                 }
                                 view.input().update(ctx, |input, ctx| {
@@ -293,7 +294,10 @@ impl EventLoop {
                 OrderedTerminalEventType::Resize { window_size } => {
                     self.process_resize_event(window_size, ctx)
                 }
-                OrderedTerminalEventType::CommandExecutionFinished { .. } => (),
+                OrderedTerminalEventType::CommandExecutionFinished { .. } => {
+                    // Queue advancement waits for block completion so input cleanup can observe
+                    // the in-flight queued command and preserve any local draft.
+                }
                 OrderedTerminalEventType::AgentResponseEvent {
                     response_initiator,
                     response_event,

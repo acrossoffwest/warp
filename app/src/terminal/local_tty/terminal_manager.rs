@@ -1936,6 +1936,7 @@ impl TerminalManager {
                         input.try_execute_command_on_behalf_of_shared_session_participant(
                             command,
                             participant_id.clone(),
+                            false,
                             ctx,
                         );
                     });
