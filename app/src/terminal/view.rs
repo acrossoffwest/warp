@@ -255,6 +255,7 @@ use crate::ai::blocklist::inline_action::code_diff_view::{CodeDiffView, FileDiff
 use crate::ai::blocklist::model::{
     AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus,
 };
+use crate::ai::blocklist::orchestration_topology::OrchestrationNavigationDirection;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::summarization_cancel_dialog::SummarizationCancelDialog;
@@ -25982,6 +25983,8 @@ impl TypedActionView for TerminalView {
             | OpenChildAgentInNewTab { .. }
             | StopAgentConversation { .. }
             | KillAgentConversation { .. }
+            | CyclePreviousOrchestrationChildAgent
+            | CycleNextOrchestrationChildAgent
             | ToggleCLIAgentRichInput
             | ToggleSessionRecording => Empty,
         }
@@ -27129,6 +27132,22 @@ impl TypedActionView for TerminalView {
                 ctx.emit(Event::KillAgentConversation {
                     conversation_id: *conversation_id,
                 });
+            }
+            CyclePreviousOrchestrationChildAgent | CycleNextOrchestrationChildAgent => {
+                let direction = match action {
+                    CyclePreviousOrchestrationChildAgent => {
+                        OrchestrationNavigationDirection::Previous
+                    }
+                    CycleNextOrchestrationChildAgent => OrchestrationNavigationDirection::Next,
+                    _ => unreachable!("matched orchestration cycle action"),
+                };
+                if let Some(conversation_id) = self
+                    .agent_view_controller
+                    .as_ref(ctx)
+                    .adjacent_orchestration_conversation_id(direction, ctx)
+                {
+                    ctx.emit(Event::RevealChildAgent { conversation_id });
+                }
             }
             ToggleSessionRecording => {
                 self.pty_recorder.update(ctx, |recorder, ctx| {
