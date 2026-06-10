@@ -989,6 +989,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
+                                // Window targeting metadata is not yet captured locally.
                                 windows: vec![],
                             },
                         )),
@@ -1034,6 +1035,7 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
+                                // Window targeting metadata is not yet captured locally.
                                 captured_window: None,
                                 windows: vec![],
                             },

@@ -321,6 +321,7 @@ dependencies = [
  "async-fs",
  "async-trait",
  "base16ct",
+ "base64 0.22.1",
  "bincode",
  "bytes",
  "cfg-if",
@@ -332,6 +333,7 @@ dependencies = [
  "filetime",
  "futures",
  "generic-array",
+ "http_client",
  "ignore",
  "instant",
  "itertools 0.14.0",
@@ -344,6 +346,7 @@ dependencies = [
  "persistence",
  "priority-queue",
  "prost-types",
+ "rand 0.8.6",
  "rayon",
  "regex",
  "repo_metadata",
@@ -351,6 +354,7 @@ dependencies = [
  "sentry",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "serde_yaml 0.8.26",
  "sha2 0.10.9",
  "shellexpand",
@@ -15053,7 +15057,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=9699b0d00d4fefd287311f744f1af9fda6672f7d#9699b0d00d4fefd287311f744f1af9fda6672f7d"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=97d1b367b955c562812e0a1315a6ec7ee6a5389e#97d1b367b955c562812e0a1315a6ec7ee6a5389e"
 dependencies = [
  "prost",
  "prost-reflect",
