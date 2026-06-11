@@ -378,6 +378,7 @@ pub(super) async fn clone_repos(
 
 /// Clone a GitHub repository to `{working_dir}/{repo.repo}` if it does not already exist.
 /// This only performs the clone -- it does NOT register the repo with `DetectedRepositories`.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo))]
 pub(super) async fn clone_repo(
     repo: &GithubRepo,
     working_dir: &Path,
@@ -438,6 +439,7 @@ pub(super) async fn clone_repo(
 
 /// Register a cloned GitHub repository with `DetectedRepositories` so that the
 /// skill watcher and other repo-aware subsystems can discover it.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo, is_sandbox = is_sandbox))]
 pub(super) async fn register_cloned_repo(
     repo: &GithubRepo,
     working_dir: &Path,
@@ -546,6 +548,7 @@ async fn subscribe_to_codebase_index_events(
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)
 }
 
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo_name))]
 async fn index_repo_codebase(
     repo_name: &str,
     working_dir: &Path,
