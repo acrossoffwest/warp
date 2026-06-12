@@ -884,7 +884,6 @@ enum DefaultSessionModeBehavior {
 struct CodeReviewPaneContext {
     repo_path: Option<LocalOrRemotePath>,
     diff_state_model: ModelHandle<DiffStateModel>,
-    terminal_view: WeakViewHandle<TerminalView>,
 }
 
 /// Parameters for updating the right panel's 'state.
@@ -8875,40 +8874,33 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         // If context is provided, use it directly. Otherwise, derive from active pane group.
-        let context_data: Option<(
-            Option<LocalOrRemotePath>,
-            ModelHandle<DiffStateModel>,
-            WeakViewHandle<TerminalView>,
-        )> = if let Some(context) = context {
-            Some((
-                context.repo_path.clone(),
-                context.diff_state_model.clone(),
-                context.terminal_view.clone(),
-            ))
-        } else {
-            let active_pane_group = self.active_tab_pane_group().clone();
-            // Read repo_path and terminal_view from the pane group (immutable context).
-            let read_result = active_pane_group.read(ctx, |pane_group, ctx| {
-                pane_group.active_session_view(ctx).map(|terminal_view| {
-                    let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
-                    let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
-                    (repo_path, preferred_session, terminal_view.downgrade())
-                })
-            });
-            // Resolve DiffStateModel outside the read closure (needs mutable context).
-            read_result.and_then(|(repo_path, preferred_session, terminal_view)| {
-                let diff_state_model = repo_path.as_ref().and_then(|rp| {
-                    self.working_directories_model.update(ctx, |model, ctx| {
-                        model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
+        let context_data: Option<(Option<LocalOrRemotePath>, ModelHandle<DiffStateModel>)> =
+            if let Some(context) = context {
+                Some((context.repo_path.clone(), context.diff_state_model.clone()))
+            } else {
+                let active_pane_group = self.active_tab_pane_group().clone();
+                // Read repo_path and preferred session from the pane group (immutable context).
+                let read_result = active_pane_group.read(ctx, |pane_group, ctx| {
+                    pane_group.active_session_view(ctx).map(|terminal_view| {
+                        let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
+                        let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
+                        (repo_path, preferred_session)
                     })
-                })?;
-                Some((repo_path, diff_state_model, terminal_view))
-            })
-        };
+                });
+                // Resolve DiffStateModel outside the read closure (needs mutable context).
+                read_result.and_then(|(repo_path, preferred_session)| {
+                    let diff_state_model = repo_path.as_ref().and_then(|rp| {
+                        self.working_directories_model.update(ctx, |model, ctx| {
+                            model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
+                        })
+                    })?;
+                    Some((repo_path, diff_state_model))
+                })
+            };
 
-        if let Some((repo, diff_state_model, terminal_view)) = context_data {
+        if let Some((repo, diff_state_model)) = context_data {
             self.right_panel_view.update(ctx, |right_pane_view, ctx| {
-                right_pane_view.open_code_review(repo, diff_state_model, terminal_view, ctx);
+                right_pane_view.open_code_review(repo, diff_state_model, ctx);
             });
         } else {
             self.right_panel_view.update(ctx, |right_panel_view, ctx| {
@@ -8951,7 +8943,6 @@ impl Workspace {
         let context = CodeReviewPaneContext {
             repo_path: repo_location,
             diff_state_model,
-            terminal_view: panel_context.terminal_view.clone(),
         };
 
         self.open_right_panel(
@@ -9051,21 +9042,17 @@ impl Workspace {
         let target_open_state =
             pane_group_handle.read(ctx, |pane_group, _| !pane_group.right_panel_open);
 
-        // Read repo_path and terminal_view from pane group (immutable context).
+        // Read repo_path and preferred session from pane group (immutable context).
         let read_result = pane_group_handle.read(ctx, |pane_group, ctx| {
             pane_group.active_session_view(ctx).map(|terminal_view| {
                 let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
                 let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
-                (repo_path, preferred_session, terminal_view.downgrade())
+                (repo_path, preferred_session)
             })
         });
         // Resolve DiffStateModel outside the read closure (needs mutable context).
         let context = read_result.and_then(
-            |(repo_path, preferred_session, terminal_view): (
-                Option<LocalOrRemotePath>,
-                Option<SessionId>,
-                WeakViewHandle<TerminalView>,
-            )| {
+            |(repo_path, preferred_session): (Option<LocalOrRemotePath>, Option<SessionId>)| {
                 let diff_state_model = repo_path.as_ref().and_then(|rp| {
                     self.working_directories_model.update(ctx, |model, ctx| {
                         model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
@@ -9074,7 +9061,6 @@ impl Workspace {
                 Some(CodeReviewPaneContext {
                     repo_path,
                     diff_state_model,
-                    terminal_view,
                 })
             },
         );
@@ -23502,10 +23488,10 @@ impl TypedActionView for Workspace {
                                     terminal_view.as_ref(ctx).current_repo_path().cloned();
                                 let preferred_session =
                                     terminal_view.as_ref(ctx).active_block_session_id();
-                                (repo_path, preferred_session, terminal_view.downgrade())
+                                (repo_path, preferred_session)
                             })
                     });
-                    if let Some((repo_path, preferred_session, terminal_view)) = read_result {
+                    if let Some((repo_path, preferred_session)) = read_result {
                         let diff_state_model = repo_path.as_ref().and_then(|rp| {
                             self.working_directories_model.update(ctx, |model, ctx| {
                                 model.get_or_create_diff_state_model(
@@ -23519,7 +23505,6 @@ impl TypedActionView for Workspace {
                             let context = CodeReviewPaneContext {
                                 repo_path,
                                 diff_state_model,
-                                terminal_view,
                             };
                             self.open_right_panel(
                                 &context,
