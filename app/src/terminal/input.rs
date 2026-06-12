@@ -253,8 +253,8 @@ use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
-    EnvVarTelemetryMetadata, PaletteSource, SlashCommandAcceptedDetails, SlashMenuSource,
-    TelemetryEvent, WorkflowTelemetryMetadata,
+    EnvVarTelemetryMetadata, PaletteSource, QueuedPromptSendNowTrigger,
+    SlashCommandAcceptedDetails, SlashMenuSource, TelemetryEvent, WorkflowTelemetryMetadata,
 };
 use crate::session_management::SessionNavigationPromptElements;
 use crate::settings::{
@@ -3583,16 +3583,25 @@ impl Input {
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
             let cli_subagent_controller = cli_subagent_controller.clone();
+            let host_editor = editor.clone();
             let panel = ctx.add_typed_action_view(|ctx| {
                 QueuedPromptsPanelView::new(
                     terminal_view_id,
                     suggestions_mode_model.clone(),
                     cli_subagent_controller,
+                    host_editor,
                     ctx,
                 )
             });
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
+            });
+            // Seed the host-pushed send permission; later changes flow through the
+            // shared-session role-change push in `TerminalView::on_self_role_updated`. Input
+            // emptiness is not pushed: the panel reads the host editor live.
+            let can_send_prompt = !model.lock().shared_session_status().is_reader();
+            panel.update(ctx, |panel, ctx| {
+                panel.set_can_send_prompt(can_send_prompt, ctx);
             });
             panel
         });
@@ -3771,24 +3780,14 @@ impl Input {
                 text,
                 is_command,
             } => {
-                let dispatched = if *is_command {
-                    self.execute_queued_command(text, *conversation_id, ctx)
-                } else {
-                    self.submit_queued_prompt_for_active_pane(
-                        text.clone(),
-                        *conversation_id,
-                        *query_id,
-                        ctx,
-                    );
-                    true
-                };
-                if !dispatched {
-                    return;
-                }
-                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.remove_fired_row(*conversation_id, *query_id, ctx);
-                });
-                self.focus_input_box(ctx);
+                self.send_queued_row_immediately(
+                    *conversation_id,
+                    *query_id,
+                    text.clone(),
+                    *is_command,
+                    QueuedPromptSendNowTrigger::SendNowButton,
+                    ctx,
+                );
             }
             QueuedPromptsPanelEvent::RowDeleted => {
                 self.focus_input_box(ctx);
@@ -3797,6 +3796,53 @@ impl Input {
                 self.focus_input_box(ctx);
             }
         }
+    }
+
+    /// Dispatches a queued row immediately: commands execute in the terminal, prompts submit to
+    /// the conversation's current target. On dispatch, removes the fired row and refocuses the
+    /// input. Shared by the row's send-now button and empty-buffer Enter.
+    fn send_queued_row_immediately(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        text: String,
+        is_command: bool,
+        trigger: QueuedPromptSendNowTrigger,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Read the origin before dispatch; the row is removed once it fires.
+        let origin = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .find(|row| row.id() == query_id)
+            .map(|row| row.origin());
+        let dispatched = if is_command {
+            self.execute_queued_command(&text, conversation_id, ctx)
+        } else {
+            self.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+            true
+        };
+        if !dispatched {
+            return;
+        }
+        if let Some(origin) = origin {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::QueuedPromptSentNow {
+                    origin: origin.into(),
+                    trigger,
+                },
+                ctx
+            );
+        }
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_fired_row(conversation_id, query_id, ctx);
+        });
+        self.focus_input_box(ctx);
+    }
+
+    /// The queued prompts panel, when [`FeatureFlag::QueueSlashCommand`] is enabled.
+    pub(crate) fn queued_prompts_panel(&self) -> Option<&ViewHandle<QueuedPromptsPanelView>> {
+        self.queued_prompts_panel.as_ref()
     }
 
     pub fn agent_input_footer(&self) -> &ViewHandle<AgentInputFooter> {
@@ -12987,6 +13033,36 @@ impl Input {
                 self.inline_slash_commands_view.update(ctx, |view, ctx| {
                     view.accept_selected_item(false, ctx);
                 });
+            }
+            return;
+        } else if self
+            .queued_prompts_panel
+            .as_ref()
+            .is_some_and(|panel| panel.as_ref(ctx).enter_sends_queued_prompt(ctx))
+        {
+            // An empty-buffer Enter sends the top queued row, mirroring its send-now button.
+            // The locked initial cloud-mode head row is not sendable, so Enter does nothing
+            // while it sits at the head of the queue.
+            let conversation_id =
+                BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id);
+            let top_row = conversation_id.and_then(|conversation_id| {
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .first()
+                    .filter(|row| !row.is_locked())
+                    .map(|row| (row.id(), row.text().to_owned(), row.is_command()))
+            });
+            if let (Some(conversation_id), Some((query_id, text, is_command))) =
+                (conversation_id, top_row)
+            {
+                self.send_queued_row_immediately(
+                    conversation_id,
+                    query_id,
+                    text,
+                    is_command,
+                    QueuedPromptSendNowTrigger::EnterOnEmptyInput,
+                    ctx,
+                );
             }
             return;
         } else if self.maybe_launch_cloud_handoff_request(ctx)
