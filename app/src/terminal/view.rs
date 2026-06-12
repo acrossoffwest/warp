@@ -3188,7 +3188,7 @@ impl TerminalView {
                                 let agent_view_zero_state = ctx.add_typed_action_view(|ctx| {
                                     AgentViewZeroStateBlock::new(
                                         *conversation_id,
-                                        *origin,
+                                        origin.clone(),
                                         me.agent_view_controller.clone(),
                                         &me.sessions,
                                         me.ambient_agent_view_model.as_ref(),
@@ -3386,7 +3386,7 @@ impl TerminalView {
                                 conversation_id: *conversation_id,
                                 is_new: was_new,
                                 is_restored: false, /* is_restored */
-                                origin: *origin,
+                                origin: origin.clone(),
                                 agent_view_controller: me.agent_view_controller.clone(),
                             },
                             RichContentInsertionPosition::Append {
@@ -21434,7 +21434,7 @@ impl TerminalView {
                 Some(id) => {
                     self.enter_agent_view_for_conversation(
                         initial_prompt.clone(),
-                        *origin,
+                        origin.clone(),
                         *id,
                         ctx,
                     );
@@ -21442,7 +21442,7 @@ impl TerminalView {
                 None => {
                     self.enter_agent_view_for_new_conversation(
                         initial_prompt.clone(),
-                        *origin,
+                        origin.clone(),
                         ctx,
                     );
                 }
@@ -26323,7 +26323,7 @@ impl TypedActionView for TerminalView {
             | OpenConversationsPalette
             | ExitAgentView
             | EnterCloudAgentView
-            | StartNewAgentConversation
+            | StartNewAgentConversation { .. }
             | ToggleConversationDetailsPanel
             | CancelAmbientAgentTask
             | OpenInlineHistoryMenu
@@ -27412,9 +27412,14 @@ impl TypedActionView for TerminalView {
                 let initial_prompt = (!draft_text.trim().is_empty()).then_some(draft_text);
                 self.enter_cloud_agent_view(initial_prompt, ctx);
             }
-            StartNewAgentConversation => {
+            StartNewAgentConversation { origin } => {
                 self.input.update(ctx, |input, ctx| {
-                    input.handle_action(&InputAction::StartNewAgentConversation, ctx);
+                    input.handle_action(
+                        &InputAction::StartNewAgentConversation {
+                            origin: origin.clone(),
+                        },
+                        ctx,
+                    );
                 });
             }
             OpenInlineHistoryMenu => {
