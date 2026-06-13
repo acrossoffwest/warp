@@ -9309,6 +9309,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.17",
+ "tracing",
 ]
 
 [[package]]
@@ -9321,7 +9322,6 @@ dependencies = [
  "bytes",
  "http 1.4.0",
  "opentelemetry",
- "reqwest",
 ]
 
 [[package]]
@@ -9337,7 +9337,6 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
- "reqwest",
  "thiserror 2.0.17",
  "zstd",
 ]
@@ -14653,6 +14652,7 @@ dependencies = [
  "onboarding",
  "once_cell",
  "opentelemetry",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "ordered-float 3.9.2",
