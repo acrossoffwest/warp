@@ -13,7 +13,10 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 #[cfg(test)]
-use super::bundled::{build_bundled_skill_context, read_bundled_skills, BundledSkillActivation};
+use super::bundled::{
+    activation_for_bundled_skill, build_bundled_skill_context, read_bundled_skills,
+    BundledSkillActivation,
+};
 use super::bundled::{BundledSkill, BundledSkills};
 use super::{SkillDescriptor, SkillPathQuery};
 use crate::ai::skills::skill_utils::unique_skills;

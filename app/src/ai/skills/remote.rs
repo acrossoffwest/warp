@@ -151,6 +151,12 @@ pub(crate) fn bundled_skills_snapshot_protos(catalog: &BundledSkill) -> Vec<Bund
                 BundledSkillActivation::RequiresMcp(integration) => {
                     Some(mcp_integration_wire_id(*integration).to_owned())
                 }
+                BundledSkillActivation::RequiresFeature(feature) => {
+                    if !feature.is_enabled() {
+                        return None;
+                    }
+                    None
+                }
                 BundledSkillActivation::RequiresFile(path) => {
                     if !path.exists() {
                         return None;

@@ -364,6 +364,7 @@ pub enum WorkspaceAction {
     OpenCodeReviewPanel(PaneViewLocator),
     /// Toggles the vertical tabs panel. This happens as an explicit action from the user.
     ToggleVerticalTabsPanel,
+    OpenVerticalTabsPanel,
     ToggleVerticalTabsSettingsPopup,
     SetVerticalTabsDisplayGranularity(VerticalTabsDisplayGranularity),
     SetVerticalTabsTabItemMode(VerticalTabsTabItemMode),
@@ -661,10 +662,13 @@ pub enum WorkspaceAction {
     NavigatePrevPaneOrPanel,
     NavigateNextPaneOrPanel,
     ToggleProjectExplorer,
+    OpenProjectExplorer,
     ToggleGlobalSearch,
     ToggleHiddenFiles,
     OpenGlobalSearch,
     ToggleConversationListView,
+    OpenConversationListView,
+    OpenAgentManagementView,
     /// Open the Build Plan Migration Modal (for debugging)
     #[cfg(debug_assertions)]
     OpenBuildPlanMigrationModal,
@@ -911,7 +915,8 @@ impl WorkspaceAction {
             | SummarizeAIConversation { .. }
             | OpenRepository { .. }
             | SelectTabConfig(_)
-            | ToggleVerticalTabsPanel => true, // actions that actually change a state of the state of user's
+            | ToggleVerticalTabsPanel
+            | OpenVerticalTabsPanel => true, // actions that actually change a state of the state of user's
             // workspace would most likely require a save, so that if the app gets
             // restarted, the user can continue working
             AutoupdateFailureLink
@@ -1070,12 +1075,15 @@ impl WorkspaceAction {
             | NavigatePrevPaneOrPanel
             | NavigateNextPaneOrPanel
             | ToggleProjectExplorer
+            | OpenProjectExplorer
             | ToggleGlobalSearch
             | ToggleHiddenFiles
             | OpenGlobalSearch
             | ToggleConversationListView
+            | OpenConversationListView
             | ToggleNotificationMailbox { .. }
             | ToggleAgentManagementView
+            | OpenAgentManagementView
             | ViewAgentRunsForEnvironment { .. }
             | ToggleAIDocumentPane { .. }
             | HideAIDocumentPanes

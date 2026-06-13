@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use ai::skills::{parse_bundled_skill, ParsedSkill, SkillReference};
 use futures::TryStreamExt;
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::{report_error, safe_warn};
 use warp_util::host_id::HostId;
@@ -20,6 +21,8 @@ use crate::settings::user_preferences_toml_file_path;
 pub enum BundledSkillActivation {
     /// Always active.
     Always,
+    /// Active only when a specific Warp feature is enabled.
+    RequiresFeature(FeatureFlag),
     /// Active only when a specific MCP server is running.
     RequiresMcp(McpIntegration),
     /// Active only when a specific file exists on disk.
@@ -30,6 +33,7 @@ impl BundledSkillActivation {
     pub fn is_enabled(&self, ctx: &AppContext) -> bool {
         match self {
             Self::Always => true,
+            Self::RequiresFeature(feature) => feature.is_enabled(),
             Self::RequiresMcp(integration) => {
                 TemplatableMCPServerManager::as_ref(ctx).is_mcp_server_running(*integration)
             }
@@ -410,13 +414,17 @@ pub(crate) fn icon_for_bundled_skill(skill_id: &str) -> Icon {
 
 /// Returns the activation condition for a bundled skill.
 ///
-/// Most skills are always active. Skills that depend on a bundled resource
-/// file use `RequiresFile` so they only appear when the resource is present.
-fn activation_for_bundled_skill(skill_id: &str, resources_dir: &Path) -> BundledSkillActivation {
+/// Most skills are always active. Other skills appear only when their required
+/// feature, integration, or bundled resource is available.
+pub(crate) fn activation_for_bundled_skill(
+    skill_id: &str,
+    resources_dir: &Path,
+) -> BundledSkillActivation {
     match skill_id {
         "modify-settings" => {
             BundledSkillActivation::RequiresFile(resources_dir.join("settings_schema.json"))
         }
+        "warpctrl" => BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
         _ => BundledSkillActivation::Always,
     }
 }
