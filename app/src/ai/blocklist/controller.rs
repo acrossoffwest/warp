@@ -2361,6 +2361,13 @@ impl BlocklistAIController {
             handle.abort();
         }
 
+        // Passive background requests never auto-resume: a resume would issue a fresh
+        // turn on a conversation the user never sees.
+        let is_passive_request = request_input
+            .all_inputs()
+            .any(|input| input.is_passive_request());
+        let can_attempt_resume_on_error = can_attempt_resume_on_error && !is_passive_request;
+
         // Make sure there's no existing response stream for the conversation. If
         // there is, something has gone wrong.
         if self
@@ -2466,10 +2473,6 @@ impl BlocklistAIController {
                 ctx,
             );
         });
-
-        let is_passive_request = request_input
-            .all_inputs()
-            .any(|input| input.is_passive_request());
 
         for input in request_input.all_inputs() {
             if let AIAgentInput::UserQuery {
@@ -2627,6 +2630,30 @@ impl BlocklistAIController {
             .in_flight_response_streams
             .try_cancel_streams_for_conversation(conversation_id, reason, ctx)
         {
+            // No active stream whose cancellation would mark the conversation `Cancelled`.
+            // A parked auto-resume was aborted above; nothing else will move the
+            // conversation out of TransientError, so surface the cancellation directly.
+            //
+            // TODO(REMOTE-1950): Track the parked auto-resume as a first-class cancelable so its
+            // cancellation flows through the same `AfterStreamFinished` path, dropping this special case.
+            if !reason.should_preserve_in_progress_status() {
+                let history_model = BlocklistAIHistoryModel::handle(ctx);
+                let is_recovering = history_model
+                    .as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_some_and(|conversation| conversation.status().is_transient_error());
+                if is_recovering {
+                    history_model.update(ctx, |history_model, ctx| {
+                        history_model.update_conversation_status(
+                            self.terminal_view_id,
+                            conversation_id,
+                            ConversationStatus::Cancelled,
+                            ctx,
+                        );
+                    });
+                }
+            }
+
             // Otherwise, cancel pending actions and update the input state.
             self.action_model.update(ctx, |action_model, ctx| {
                 action_model.cancel_all_pending_actions(conversation_id, Some(reason), ctx);
@@ -2796,6 +2823,11 @@ impl BlocklistAIController {
                             });
                         }
 
+                        // A resume scheduled for this failure keeps the conversation in
+                        // the non-terminal TransientError status instead of Error.
+                        let recovery_pending = response_stream
+                            .as_ref(ctx)
+                            .should_resume_conversation_after_stream_finished();
                         let mut renderable_error: RenderableAIError = e.as_ref().into();
                         if let RenderableAIError::Other {
                             will_attempt_resume,
@@ -2803,11 +2835,10 @@ impl BlocklistAIController {
                             ..
                         } = &mut renderable_error
                         {
-                            let should_attempt_resume = response_stream
-                                .as_ref(ctx)
-                                .should_resume_conversation_after_stream_finished();
-                            *will_attempt_resume |= should_attempt_resume;
-                            if should_attempt_resume {
+                            // Rendering-only hints; state machine consumers key off the
+                            // TransientError conversation status instead.
+                            *will_attempt_resume |= recovery_pending;
+                            if recovery_pending {
                                 let network_status = NetworkStatus::as_ref(ctx);
                                 *waiting_for_network = !network_status.is_online();
                             }
@@ -2816,6 +2847,7 @@ impl BlocklistAIController {
                         history_model.update(ctx, |history_model, ctx| {
                             history_model.mark_response_stream_completed_with_error(
                                 renderable_error,
+                                recovery_pending,
                                 &stream_id,
                                 conversation_id,
                                 self.terminal_view_id,
@@ -2824,6 +2856,32 @@ impl BlocklistAIController {
                         });
                     }
                 }
+            }
+            ResponseStreamEvent::WaitingForNetwork { waiting } => {
+                let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation_for_response_stream(&stream_id)
+                else {
+                    log::warn!("Could not find conversation for response stream: {stream_id:?}");
+                    return;
+                };
+                // Mirror the parked-retry state on the conversation: TransientError while
+                // waiting for connectivity, back to InProgress when the retry fires.
+                // This event is only emitted after a recoverable request failure parks a
+                // retry while offline (see `defer_retry_until_online`), so treating
+                // `waiting` as a transient-error state is always correct here.
+                let status = if *waiting {
+                    ConversationStatus::TransientError
+                } else {
+                    ConversationStatus::InProgress
+                };
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.update_conversation_status(
+                        self.terminal_view_id,
+                        conversation_id,
+                        status,
+                        ctx,
+                    );
+                });
             }
             ResponseStreamEvent::AfterStreamFinished { cancellation } => {
                 // Cancellations provide conversation_id (survives truncation); otherwise use dynamic lookup.
@@ -2901,13 +2959,16 @@ impl BlocklistAIController {
                         self.set_input_mode_for_cancellation(ctx);
                     }
                 } else if is_any_exchange_unfinished {
+                    // Defensive: truncated streams are detected inside `ResponseStream`,
+                    // so an unfinished exchange here means an unexpected completion path.
                     log::warn!(
-                        "generate_multi_agent_output stream ended without emitting StreamFinished event."
+                        "Response stream completed with an unfinished exchange and no error event."
                     );
 
                     history_model.update(ctx, |history_model, ctx| {
                         history_model.mark_response_stream_completed_with_error(
                             RenderableAIError::transient_network_error(false, false),
+                            /*recovery_pending*/ false,
                             &stream_id,
                             conversation_id,
                             self.terminal_view_id,
@@ -3060,6 +3121,7 @@ impl BlocklistAIController {
                             will_attempt_resume: false,
                             waiting_for_network: false,
                         },
+                        /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,
@@ -3072,6 +3134,7 @@ impl BlocklistAIController {
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
                         RenderableAIError::ContextWindowExceeded(error_message.to_owned()),
+                        /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,
@@ -3085,6 +3148,7 @@ impl BlocklistAIController {
                         RenderableAIError::QuotaLimit {
                             user_display_message: None,
                         },
+                        /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,
@@ -3101,6 +3165,7 @@ impl BlocklistAIController {
                             will_attempt_resume: false,
                             waiting_for_network: false,
                         },
+                        /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,
@@ -3138,6 +3203,7 @@ impl BlocklistAIController {
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
                         error,
+                        /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,
@@ -3157,6 +3223,7 @@ impl BlocklistAIController {
                             will_attempt_resume: false,
                             waiting_for_network: false,
                         },
+                        /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,
@@ -3169,6 +3236,7 @@ impl BlocklistAIController {
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
                         RenderableAIError::ContextWindowExceeded(error_message.to_owned()),
+                        /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
                         self.terminal_view_id,

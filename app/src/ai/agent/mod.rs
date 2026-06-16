@@ -710,12 +710,25 @@ impl From<&AIApiError> for RenderableAIError {
             },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
             AIApiError::Transport(error)
-            | AIApiError::Deserialization(DeserializationError::Transport(error))
-                if Self::is_transient_network_transport_error(error) =>
-            {
-                Self::transient_network_error(false, false)
+            | AIApiError::Deserialization(DeserializationError::Transport(error)) => {
+                // A transport error with no HTTP status is a lost-connection failure; one that
+                // carries a status means the server responded, so it gets generic rendering.
+                if Self::is_transient_network_transport_error(error) {
+                    Self::transient_network_error(false, false)
+                } else {
+                    Self::Other {
+                        error_message: format!("Request failed with error: {value:?}"),
+                        will_attempt_resume: false,
+                        waiting_for_network: false,
+                    }
+                }
             }
-            _ => Self::Other {
+            AIApiError::UnexpectedEof => Self::transient_network_error(false, false),
+            AIApiError::Deserialization(DeserializationError::Json(_))
+            | AIApiError::NoContextFound
+            | AIApiError::ErrorStatus(_, _)
+            | AIApiError::Other(_)
+            | AIApiError::Stream { .. } => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
                 waiting_for_network: false,

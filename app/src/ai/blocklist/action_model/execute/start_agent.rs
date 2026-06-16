@@ -573,13 +573,15 @@ impl StartAgentExecutor {
 
 /// Whether a child that failed before launch should have its hidden pane and
 /// conversation cleaned up. Only terminal launch failures qualify; recoverable
-/// `Blocked` startup states (e.g. awaiting GitHub auth) keep their chip so the
-/// user can resolve them.
+/// `Blocked` startup states (e.g. awaiting GitHub auth) and non-terminal
+/// `TransientError` (a recovery is in flight) keep their chip so the user can
+/// resolve them or let the retry complete.
 fn should_cleanup_failed_child_launch(status: &ConversationStatus) -> bool {
     match status {
         ConversationStatus::Error | ConversationStatus::Cancelled => true,
         ConversationStatus::Blocked { .. }
         | ConversationStatus::InProgress
+        | ConversationStatus::TransientError
         | ConversationStatus::Success
         | ConversationStatus::WaitingForEvents => false,
     }
@@ -610,9 +612,11 @@ fn start_agent_error_message_for_status(
         // `WaitingForEvents` is treated like `InProgress`/`Success` here:
         // a child that's actively waiting for events has, by definition,
         // already initialized successfully and is not an error case.
-        // The agent run is still in flight, so we don't surface an error
-        // message for the start path.
+        // TransientError is likewise non-terminal: a recovery is in flight,
+        // so keep waiting. The agent run is still in flight in all of these
+        // cases, so we don't surface an error message for the start path.
         ConversationStatus::InProgress
+        | ConversationStatus::TransientError
         | ConversationStatus::Success
         | ConversationStatus::WaitingForEvents => None,
     }
