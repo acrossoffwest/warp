@@ -37,6 +37,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
     CancellationReason, FinishedAIAgentOutput, RenderableAIError, RequestFileEditsResult,
+    TransientNetworkErrorKind,
 };
 use crate::ai::agent_sdk::driver::harness::{
     harness_model_env_vars, task_env_vars, HarnessCleanupDisposition, HarnessKind, HarnessRunner,
@@ -3021,7 +3022,11 @@ impl AgentDriver {
                                 _ => None,
                             })
                             .unwrap_or_else(|| {
-                                RenderableAIError::transient_network_error(false, false)
+                                RenderableAIError::transient_network_error(
+                                    false,
+                                    false,
+                                    TransientNetworkErrorKind::MissingExchangeError,
+                                )
                             });
                         run_exit.end_run_after(
                             AUTO_RESUME_TIMEOUT,

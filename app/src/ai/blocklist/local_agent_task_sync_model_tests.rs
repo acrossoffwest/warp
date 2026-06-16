@@ -14,7 +14,7 @@ use super::{
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentExchange, AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput,
-    RenderableAIError,
+    RenderableAIError, TransientNetworkErrorKind,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::llms::LLMId;
@@ -126,6 +126,20 @@ fn other_error_is_error_with_internal() {
         AgentTaskState::Error,
         Some(PlatformErrorCode::InternalError),
         Some("something broke"),
+    );
+}
+
+#[test]
+fn transient_network_error_is_error_with_internal_and_debug_details() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::transient_network_error(
+            false,
+            false,
+            TransientNetworkErrorKind::UnfinishedExchange,
+        )),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("Debug info: stream completed with an unfinished exchange"),
     );
 }
 

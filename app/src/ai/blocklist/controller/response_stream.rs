@@ -571,3 +571,7 @@ pub enum ResponseStreamEvent {
 impl Entity for ResponseStream {
     type Event = ResponseStreamEvent;
 }
+
+#[cfg(test)]
+#[path = "response_stream_tests.rs"]
+mod tests;
