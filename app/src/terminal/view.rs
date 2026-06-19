@@ -407,6 +407,8 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
     CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
     MenuPositioningProvider,
@@ -20269,8 +20271,28 @@ impl TerminalView {
                 self.handle_resume_conversation(conversation_id, ctx);
             }
             AIBlockEvent::InsertForkSlashCommand => {
+                #[cfg(target_family = "wasm")]
+                let command_name = commands::FORK.name;
+
+                #[cfg(not(target_family = "wasm"))]
+                let command_name = {
+                    let is_cloud_agent_context = self.is_ambient_agent_session(ctx)
+                        || self.input.as_ref(ctx).is_cloud_mode_input_v2_composing(ctx);
+                    let conversation_id = self
+                        .agent_view_controller
+                        .as_ref(ctx)
+                        .agent_view_state()
+                        .active_conversation_id()
+                        .or_else(|| {
+                            BlocklistAIHistoryModel::as_ref(ctx)
+                                .active_conversation(self.view_id)
+                                .map(|conv| conv.id())
+                        });
+                    fork_button_action(conversation_id, is_cloud_agent_context, ctx).command_name
+                };
+
                 self.input.update(ctx, |input, ctx| {
-                    input.replace_buffer_content(&format!("{} ", commands::FORK.name), ctx);
+                    input.replace_buffer_content(&format!("{} ", command_name), ctx);
                     ctx.focus_self();
                 });
             }

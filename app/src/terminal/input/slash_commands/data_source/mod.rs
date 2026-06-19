@@ -295,10 +295,12 @@ impl SlashCommandDataSource {
         }
 
         if self.is_cloud_mode_v2 && FeatureFlag::CloudModeInputV2.is_enabled() {
-            session_context |= Availability::CLOUD_AGENT_V2;
+            session_context |= Availability::CLOUD_MODE_V2_COMPOSER;
         }
 
-        if !self.is_cloud_mode(ctx) {
+        if self.is_cloud_mode(ctx) {
+            session_context |= Availability::CLOUD_AGENT;
+        } else {
             session_context |= Availability::NOT_CLOUD_AGENT;
         }
 
@@ -335,9 +337,15 @@ impl SlashCommandDataSource {
         if command.name == commands::MOVE_TO_CLOUD.name && !context.is_cloud_handoff_enabled {
             return false;
         }
-        // /continue-locally only applies to cloud Oz conversations. Local conversations
-        // and non-Oz cloud runs (Claude, Gemini) are filtered out so the slash menu
-        // doesn't surface a no-op command.
+        if command.name == commands::FORK.name
+            && context
+                .session_context
+                .contains(Availability::CLOUD_MODE_V2_COMPOSER)
+        {
+            return false;
+        }
+        // /continue-locally only applies to cloud Oz conversations. Non-Oz cloud runs
+        // (Claude, Gemini) are filtered out so the slash menu doesn't surface a no-op command.
         #[cfg(not(target_family = "wasm"))]
         if command.name == commands::CONTINUE_LOCALLY.name
             && !context.active_conversation_is_cloud_oz
