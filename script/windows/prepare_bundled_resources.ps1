@@ -20,7 +20,10 @@ Param(
     [String]$Channel = '',
 
     [Parameter(Mandatory = $false)]
-    [String]$CargoProfile = ''
+    [String]$CargoProfile = '',
+
+    [Parameter(Mandatory = $false)]
+    [String]$CargoFeatures = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -167,6 +170,9 @@ if ($env:SKIP_SETTINGS_SCHEMA -ne '1') {
     $SchemaCmd = @('run')
     if ($CargoProfile) {
         $SchemaCmd += @('--profile', $CargoProfile)
+    }
+    if ($CargoFeatures) {
+        $SchemaCmd += @('--features', $CargoFeatures)
     }
     $SchemaCmd += @('--manifest-path', (Join-Path $RepoRoot 'Cargo.toml'), '--bin', 'generate_settings_schema', '--')
     if ($Channel) {
