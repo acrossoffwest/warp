@@ -232,7 +232,7 @@ use warp_server_client::iap::{IapManager, IapManagerEvent, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
-use warpui::platform::app::ApproveTerminateResult;
+use warpui::platform::app::{ApproveTerminateResult, TerminationRequestSource};
 use warpui::platform::TerminationMode;
 use warpui::windowing::state::ApplicationStage;
 use warpui::{App, AppContext, Event, SingletonEntity, WindowId};
@@ -2432,7 +2432,20 @@ pub(crate) fn app_callbacks(
                 ApproveTerminateResult::Terminate
             }
         })),
-        on_should_terminate_app: Some(Box::new(move |ctx| {
+        on_should_terminate_app: Some(Box::new(move |source, ctx| {
+            // Never interrupt a system-initiated termination (logout / restart /
+            // scheduled OS update): both cancel paths below return
+            // `ApproveTerminateResult::Cancel`, which macOS interprets as Warp
+            // refusing to quit. That can abort a scheduled OS update while the
+            // quit-warning modal has no visible window to attach to, leaving
+            // Warp waiting on a prompt nobody can see (#12441). Skipping
+            // `apply_pending_update` here doesn't lose the update: the next
+            // update check re-detects it (autoupdate state isn't persisted
+            // across restarts, so the artifact may be re-downloaded).
+            if source == TerminationRequestSource::System {
+                return ApproveTerminateResult::Terminate;
+            }
+
             send_telemetry_from_app_ctx!(
                 TelemetryEvent::UserInitiatedClose {
                     initiated_on: CloseTarget::App,
