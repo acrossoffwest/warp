@@ -7844,8 +7844,6 @@ impl Workspace {
                     return false;
                 }
                 self.trigger_agent_onboarding(ctx);
-            } else {
-                self.trigger_legacy_onboarding(ctx);
             }
 
             // Add telemetry banner for new users BEFORE the agentic onboarding blocks.
@@ -7864,13 +7862,6 @@ impl Workspace {
         }
 
         false
-    }
-
-    fn trigger_legacy_onboarding(&self, ctx: &mut ViewContext<Self>) {
-        self.dispatch_onboarding(
-            TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-            ctx,
-        );
     }
 
     fn trigger_agent_onboarding(&self, ctx: &mut ViewContext<Self>) {
