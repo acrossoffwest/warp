@@ -609,7 +609,7 @@ impl AgentInputFooter {
 
         let context_window_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
-                .with_icon(Icon::ConversationContext0)
+                .with_icon(Icon::ContextRemaining100)
                 .with_tooltip("Context window usage")
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
