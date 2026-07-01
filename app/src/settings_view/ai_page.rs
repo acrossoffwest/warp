@@ -603,8 +603,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             .with_group(bindings::BindingGroup::WarpAi)
             .is_supported_on_current_platform(
                 UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
-                    || (FeatureFlag::CustomInferenceEndpoints.is_enabled()
-                        && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)),
+                    || UserWorkspaces::as_ref(app).is_custom_inference_enabled(app),
             ),
             ToggleSettingActionPair::new(
                 "auto show or hide Rich Input based on agent status",
@@ -2283,8 +2282,7 @@ impl AISettingsPageView {
             .collect()
     }
     fn can_use_custom_inference_controls(app: &AppContext) -> bool {
-        FeatureFlag::CustomInferenceEndpoints.is_enabled()
-            && AISettings::as_ref(app).is_any_ai_enabled(app)
+        AISettings::as_ref(app).is_any_ai_enabled(app)
             && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
     }
 
@@ -8743,8 +8741,7 @@ impl SettingsWidget for ApiKeysWidget {
             UserWorkspaces::as_ref(app).is_custom_inference_enabled(app);
         let provider_keys_enabled = is_any_ai_enabled && is_byo_enabled;
         let custom_inference_controls_enabled = is_any_ai_enabled && is_custom_inference_enabled;
-        let custom_inference_flag_on = FeatureFlag::CustomInferenceEndpoints.is_enabled();
-        let show_custom_inference = custom_inference_flag_on && is_custom_inference_enabled;
+        let show_custom_inference = is_custom_inference_enabled;
 
         let mut column = Flex::column().with_child(render_separator(appearance));
 
