@@ -187,6 +187,7 @@ const CUSTOM_INFERENCE_LEARN_MORE_URL: &str =
     "https://docs.warp.dev/agent-platform/inference/custom-inference-endpoint/";
 const CUSTOM_INFERENCE_TERMS_URL: &str = "https://www.warp.dev/legal/terms-of-service";
 const CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
+const CUSTOM_ENDPOINT_MODAL_MAX_HEIGHT_PERCENTAGE: f32 = 0.8;
 
 pub fn init_actions_from_parent_view<T: Action + Clone>(
     app: &mut AppContext,
@@ -1765,7 +1766,6 @@ impl AISettingsPageView {
             )
             .with_modal_style(UiComponentStyles {
                 width: Some(560.),
-                height: Some(600.),
                 ..Default::default()
             })
             .with_header_style(UiComponentStyles {
@@ -1784,11 +1784,12 @@ impl AISettingsPageView {
                     top: 0.,
                     bottom: 24.,
                     left: 24.,
-                    right: 24.,
+                    right: 0.,
                 }),
                 ..Default::default()
             })
             .with_background_opacity(100)
+            .with_max_height_percentage(CUSTOM_ENDPOINT_MODAL_MAX_HEIGHT_PERCENTAGE)
             .with_dismiss_on_click()
             .with_dismiss_keystroke(Keystroke::parse("escape").unwrap())
         });
