@@ -9425,18 +9425,13 @@ impl SettingsWidget for CustomModelRoutersWidget {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                warpui::elements::Shrinkable::new(
-                    1.,
-                    build_sub_header(appearance, "Custom Routers", Some(header_color)).finish(),
-                )
-                .finish(),
-            )
+            .with_child(build_sub_header(appearance, "Custom Routers", Some(header_color)).finish())
             .with_child({
                 #[cfg(feature = "local_fs")]
                 {
                     warpui::elements::Container::new(view.add_router_button.as_ref(app).render(app))
-                        .with_margin_left(16.)
+                        .with_margin_bottom(4.)
+                        .with_margin_top(-4.)
                         .finish()
                 }
                 #[cfg(not(feature = "local_fs"))]
