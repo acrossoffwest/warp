@@ -1190,7 +1190,7 @@ impl BlockList {
     }
 
     /// Takes and clears the set of dirty rich content view IDs.
-    pub(in crate::terminal) fn take_dirty_rich_content_items(&mut self) -> HashSet<EntityId> {
+    pub fn take_dirty_rich_content_items(&mut self) -> HashSet<EntityId> {
         std::mem::take(&mut self.dirty_rich_content_items)
     }
 
@@ -2167,7 +2167,7 @@ impl BlockList {
     fn update_blocks_and_sumtree<F, G>(
         &mut self,
         subshell_separator_height: Option<f32>,
-        rich_content_heights: Option<&HashMap<EntityId, f64>>,
+        rich_content_heights: Option<&HashMap<EntityId, BlockHeight>>,
         block_update_fn: F,
         gap_update_fn: G,
     ) where
@@ -2237,16 +2237,10 @@ impl BlockList {
                             should_hide: false,
                         }
                         .should_hide_for_agent_view_state(agent_view_state);
-                        let updated_height = if let Some(updated_height) =
-                            rich_content_heights.and_then(|heights| heights.get(view_id))
-                        {
-                            updated_height
-                                .into_pixels()
-                                .to_lines(self.size().cell_height_px())
-                                .into()
-                        } else {
-                            *last_laid_out_height
-                        };
+                        let updated_height = rich_content_heights
+                            .and_then(|heights| heights.get(view_id))
+                            .copied()
+                            .unwrap_or(*last_laid_out_height);
 
                         new_sum_tree.push(BlockHeightItem::RichContent(RichContentItem {
                             content_type: *content_type,
@@ -2361,7 +2355,28 @@ impl BlockList {
         );
     }
 
+    /// Updates rich-content heights from GUI pixel measurements, converting to
+    /// the canonical line unit at the boundary.
     pub fn update_rich_content_heights(&mut self, updated_heights: &HashMap<EntityId, f64>) {
+        let cell_height_px = self.size().cell_height_px();
+        let updated_heights = updated_heights
+            .iter()
+            .map(|(view_id, height)| {
+                (
+                    *view_id,
+                    height.into_pixels().to_lines(cell_height_px).into(),
+                )
+            })
+            .collect::<HashMap<EntityId, BlockHeight>>();
+        self.update_rich_content_heights_in_lines(&updated_heights);
+    }
+
+    /// Updates rich-content heights already measured in the canonical line unit
+    /// (used by the TUI, whose layout is row-based).
+    pub fn update_rich_content_heights_in_lines(
+        &mut self,
+        updated_heights: &HashMap<EntityId, BlockHeight>,
+    ) {
         self.update_blocks_and_sumtree(None, Some(updated_heights), |_| {}, |_| {});
     }
 
