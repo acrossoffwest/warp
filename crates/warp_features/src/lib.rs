@@ -905,6 +905,11 @@ pub enum FeatureFlag {
     /// Enables the `--runner` flag on `run-cloud`, which overrides an agent's
     /// compute (docker image, instance shape, setup commands) by runner ID.
     CloudRunners,
+
+    /// Renders MCP tool-call request and response JSON as an interactive
+    /// collapsible tree with typed colors and per-row Copy JSON, instead of
+    /// a flat pretty-printed blob.
+    McpJsonTreeView,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -976,6 +981,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::McpJsonTreeView,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
