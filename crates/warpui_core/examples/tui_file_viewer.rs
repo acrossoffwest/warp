@@ -7,8 +7,8 @@
 //!   - Full event loop (keypress → action → `ctx.notify()` → repaint)
 //!
 //! **Note**: The full editor-backed `TuiInputView` lives in `crates/warp_tui/src/input/`
-//! (see the `tui_input_demo` example in that crate). This example proves out the
-//! TUI runtime layer independently of the editor.
+//! and is exercised by the real `warp-tui` binary (`./script/run-tui`). This
+//! example proves out the TUI runtime layer independently of the editor.
 //!
 //! Run from a real terminal:
 //!
@@ -131,7 +131,7 @@ impl TuiView for FileView {
 
         // ── Wire up key handlers ────────────────────────────────────────────
         Box::new(
-            TuiEventHandler::new(TuiFlex::column().with_children(rows))
+            TuiEventHandler::new(TuiFlex::column().with_children(rows).finish())
                 .on_key("j", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineDown))
                 .on_key("down", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineDown))
                 .on_key("k", |_, ctx, _| ctx.dispatch_typed_action(Nav::LineUp))
