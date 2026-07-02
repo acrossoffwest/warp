@@ -1,11 +1,16 @@
 //! Authenticated terminal-session TUI surface.
+use std::borrow::Cow;
+use std::sync::Arc;
 
+use parking_lot::FairMutex;
 use warp::editor::CodeEditorModel;
 use warp::tui_export::{
-    ActiveSession, AgentViewEntryOrigin, Appearance, BlocklistAIActionModel,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIInputModel, ConversationSelection,
-    ConversationSelectionHandle, GetRelevantFilesController, ModelEvent, PtyIntent, PtyIntentEvent,
-    TerminalSurface, TerminalSurfaceInit,
+    AIAgentPtyWriteMode, ActiveSession, AgentInteractionMetadata, AgentViewEntryOrigin, Appearance,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CommandExecutionSource, ConversationSelection,
+    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, ModelEvent,
+    PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit,
 };
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::SingletonEntity;
@@ -25,12 +30,24 @@ use crate::transcript_view::TuiTranscriptView;
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 
-/// This TUI surface does not emit direct PTY intents.
-pub(crate) struct TuiTerminalSessionEvent;
+/// Events emitted by the TUI terminal session surface.
+pub(crate) enum TuiTerminalSessionEvent {
+    ExecuteCommand(Box<ExecuteCommandEvent>),
+    WriteAgentInput {
+        bytes: Cow<'static, [u8]>,
+        mode: AIAgentPtyWriteMode,
+    },
+}
 
 impl PtyIntentEvent for TuiTerminalSessionEvent {
     fn pty_intent(&self) -> Option<PtyIntent> {
-        None
+        match self {
+            Self::ExecuteCommand(event) => Some(PtyIntent::ExecuteCommand((**event).clone())),
+            Self::WriteAgentInput { bytes, mode } => Some(PtyIntent::WriteAgentInput {
+                bytes: bytes.clone(),
+                mode: *mode,
+            }),
+        }
     }
 }
 
@@ -95,7 +112,7 @@ impl TuiTerminalSessionView {
                 ai_input_model,
                 context_model,
                 conversation_selection.clone(),
-                action_model,
+                action_model.clone(),
                 active_session,
                 model.clone(),
                 terminal_surface_id,
@@ -117,6 +134,13 @@ impl TuiTerminalSessionView {
                     ctx.notify();
                 }
             }
+        });
+
+        // Bridge shared shell-tool executor events into terminal-manager PTY intents.
+        let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
+        let model_for_shell_events = model.clone();
+        ctx.subscribe_to_model(&shell_command_executor, move |view, _, event, ctx| {
+            view.handle_shell_command_executor_event(event, &model_for_shell_events, ctx);
         });
 
         // These events update block metadata or grids the transcript reads.
@@ -166,6 +190,59 @@ impl TuiTerminalSessionView {
         self.ai_controller.update(ctx, |controller, ctx| {
             controller.send_user_query_in_conversation(prompt, conversation_id, None, ctx);
         });
+    }
+
+    /// Bridges shared shell-tool executor events into terminal-manager PTY intents.
+    fn handle_shell_command_executor_event(
+        &mut self,
+        event: &ShellCommandExecutorEvent,
+        model: &Arc<FairMutex<TerminalModel>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ShellCommandExecutorEvent::ExecuteCommand { action_id, command } => {
+                let Some((session_id, conversation_id)) = (|| {
+                    let model = model.lock();
+                    let session_id = model.block_list().active_block().session_id()?;
+                    let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation_id_for_action(action_id, ctx.view_id())?;
+                    Some((session_id, conversation_id))
+                })() else {
+                    log::warn!(
+                        "Unable to execute TUI agent-requested command for action {action_id:?}"
+                    );
+                    return;
+                };
+
+                ctx.emit(TuiTerminalSessionEvent::ExecuteCommand(Box::new(
+                    ExecuteCommandEvent {
+                        command: command.clone(),
+                        session_id,
+                        workflow_id: None,
+                        workflow_command: None,
+                        should_add_command_to_history: true,
+                        source: CommandExecutionSource::AI {
+                            metadata: AgentInteractionMetadata::new_hidden(
+                                action_id.clone(),
+                                conversation_id,
+                            ),
+                        },
+                    },
+                )));
+            }
+            ShellCommandExecutorEvent::WriteToPty { input, mode } => {
+                ctx.emit(TuiTerminalSessionEvent::WriteAgentInput {
+                    bytes: Cow::Owned(input.to_vec()),
+                    mode: *mode,
+                });
+            }
+            // TODO(tui-agent-cancel): we need to think about how we want to handle ctrl c.
+            // Right now it shuts down the entire app, but we should probably mimic the pattern from claude code, amp, etc.
+            // and have one ctrl c shut down any in progress conversation or tool call, and a double ctrl c actually close the app
+            // (with some ephemeral message after the first ctrl c).
+            ShellCommandExecutorEvent::CancelExecution
+            | ShellCommandExecutorEvent::TransferControlToUser { .. } => {}
+        }
     }
 }
 
