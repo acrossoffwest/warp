@@ -5,6 +5,7 @@ use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndp
 pub use ai::LLMId;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
@@ -18,6 +19,7 @@ use crate::auth::AuthStateProvider;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::report_error;
 use crate::server::server_api::ServerApiProvider;
+use crate::settings::AISettings;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
@@ -688,15 +690,19 @@ impl LLMPreferences {
         app: &AppContext,
         terminal_view_id: Option<EntityId>,
     ) -> &LLMInfo {
+        // In the TUI, the file-backed `agents.model` setting is the source of
+        // truth for the base model: it overrides both per-surface overrides
+        // and the cloud-synced execution profile, keeping the TUI's TOML file
+        // the single place the model is configured.
+        if settings::settings_mode() == settings::SettingsMode::Tui {
+            return self.tui_agent_model_info(AISettings::as_ref(app).agent_model.value(), app);
+        }
+
         if let Some(terminal_view_id) = terminal_view_id {
             let raw_override = self.base_llm_for_terminal_view.get(&terminal_view_id);
             if let Some(llm_id) = raw_override {
-                if let Some(llm_info) = Self::server_info_for_id_router_gated(
-                    &self.models_by_feature.agent_mode,
-                    llm_id,
-                )
-                .or_else(|| self.custom_llm_info_for_id_if_enabled(llm_id, app))
-                .or_else(|| self.custom_router_llm_info_for_id_if_enabled(llm_id))
+                if let Some(llm_info) =
+                    self.model_info_for_id(&self.models_by_feature.agent_mode, llm_id, app)
                 {
                     return llm_info;
                 }
@@ -709,12 +715,48 @@ impl LLMPreferences {
             .data()
             .base_model
             .clone()
-            .and_then(|id| {
-                Self::server_info_for_id_router_gated(&self.models_by_feature.agent_mode, &id)
-                    .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
-                    .or_else(|| self.custom_router_llm_info_for_id_if_enabled(&id))
-            })
+            .and_then(|id| self.model_info_for_id(&self.models_by_feature.agent_mode, &id, app))
             .unwrap_or_else(|| self.models_by_feature.agent_mode.default_llm_info())
+    }
+
+    /// Resolves `id` against `available` (a feature's server-provided model
+    /// list, custom-router gated), then the user's custom-endpoint models and
+    /// local custom routers (both gated on their respective entitlement /
+    /// feature flag).
+    ///
+    /// Shared by the per-surface override, execution-profile, and TUI
+    /// `agents.model` resolution paths so their lookup semantics can't drift.
+    fn model_info_for_id<'a>(
+        &'a self,
+        available: &'a AvailableLLMs,
+        id: &LLMId,
+        app: &AppContext,
+    ) -> Option<&'a LLMInfo> {
+        Self::server_info_for_id_router_gated(available, id)
+            .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
+            .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
+    }
+
+    /// Resolves the TUI's file-backed `agents.model` setting (the
+    /// `TuiAgentModel` setting) to an `LLMInfo`.
+    ///
+    /// `"auto"` — the default — resolves to the server-provided default model
+    /// (i.e. defers to Warp's automatic model selection). Unknown ids also
+    /// fall back to the default, so an invalid TOML value never sends an
+    /// unresolvable model id to the server.
+    ///
+    /// TODO: once the TUI grows general invalid-settings UI support, surface
+    /// unknown `agents.model` values to the user instead of silently falling
+    /// back to the default model.
+    fn tui_agent_model_info(&self, setting: &str, app: &AppContext) -> &LLMInfo {
+        if setting != TUI_AUTO_MODEL_SETTING {
+            let id = LLMId::from(setting);
+            if let Some(info) = self.model_info_for_id(&self.models_by_feature.agent_mode, &id, app)
+            {
+                return info;
+            }
+        }
+        self.models_by_feature.agent_mode.default_llm_info()
     }
 
     pub fn get_active_coding_model<'a>(
@@ -737,11 +779,7 @@ impl LLMPreferences {
             .data()
             .coding_model
             .clone()
-            .and_then(|id| {
-                Self::server_info_for_id_router_gated(&self.models_by_feature.coding, &id)
-                    .or_else(|| self.custom_llm_info_for_id_if_enabled(&id, app))
-                    .or_else(|| self.custom_router_llm_info_for_id_if_enabled(&id))
-            })
+            .and_then(|id| self.model_info_for_id(&self.models_by_feature.coding, &id, app))
             .unwrap_or_else(|| self.models_by_feature.coding.default_llm_info())
     }
 
@@ -1538,6 +1576,10 @@ impl LLMPreferences {
         }
     }
 }
+
+/// The TUI `agents.model` value that defers model choice to Warp's automatic
+/// model selection (the server-provided default).
+const TUI_AUTO_MODEL_SETTING: &str = "auto";
 
 #[derive(Clone, Debug)]
 pub enum LLMPreferencesEvent {
