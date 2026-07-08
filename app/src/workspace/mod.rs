@@ -1,5 +1,6 @@
 mod action;
 mod active_session;
+pub mod agent_session_reader;
 pub mod bonus_grant_notification_model;
 #[cfg(target_os = "macos")]
 mod cli_install;
@@ -21,7 +22,6 @@ pub mod tab_settings;
 mod toast_stack;
 pub mod util;
 pub mod view;
-pub mod agent_session_reader;
 
 use crate::ai::blocklist::NEW_AGENT_PANE_LABEL;
 use crate::ai::skills::SkillManager;
@@ -132,6 +132,7 @@ pub fn init(app: &mut AppContext) {
     code::init(app);
     sync_inputs::init(app);
     lsp::init(app);
+    register_session_memory_bindings(app);
 
     app.register_fixed_bindings([FixedBinding::empty(
         "Dump debug info",
@@ -1349,6 +1350,17 @@ pub fn init(app: &mut AppContext) {
     .with_mac_key_binding("cmd-shift-M")
     .with_linux_or_windows_key_binding("ctrl-shift-M")
     .with_group(bindings::BindingGroup::WarpAi.as_str())]);
+}
+
+pub(crate) fn register_session_memory_bindings(app: &mut AppContext) {
+    use warpui::keymap::macros::*;
+
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:show_session_memory",
+        "Show Session Memory",
+        WorkspaceAction::ShowSessionMemory,
+    )
+    .with_context_predicate(id!("Workspace"))]);
 }
 
 fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {

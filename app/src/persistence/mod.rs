@@ -123,6 +123,11 @@ pub struct WriterHandles {
     pub sender: SyncSender<ModelEvent>,
 }
 
+pub use crate::session_memory::types::{
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    SessionMemoryStatus,
+};
+
 /// Model for interacting with the writer thread.
 pub struct PersistenceWriter {
     thread_handle: Option<JoinHandle<()>>,
@@ -206,6 +211,8 @@ pub struct PersistedData {
     pub ignored_suggestions: Vec<(String, SuggestionType)>,
     pub mcp_server_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     pub mcp_servers_to_restore: Vec<Uuid>,
+    #[allow(dead_code)]
+    pub session_memory_records: Vec<SessionMemoryRecord>,
 }
 
 #[derive(Clone, Debug)]
@@ -392,5 +399,15 @@ pub enum ModelEvent {
         content: String,
         version: i32,
         title: String,
+    },
+    UpsertSessionMemoryRecord {
+        record: SessionMemoryRecord,
+    },
+    MarkSessionMemoryRecordClosed {
+        id: String,
+        closed_intentionally_at: i64,
+    },
+    DeleteSessionMemoryRecord {
+        id: String,
     },
 }

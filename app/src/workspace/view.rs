@@ -11,6 +11,7 @@ pub(crate) mod left_panel;
 pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod right_panel;
+pub(crate) mod session_memory_board;
 mod startup_directory;
 #[cfg(test)]
 #[path = "view_tests.rs"]
@@ -149,6 +150,9 @@ use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaun
 use crate::workspace::view::openwarp_launch_modal::{
     OpenWarpLaunchModal, OpenWarpLaunchModalEvent,
 };
+use crate::workspace::view::session_memory_board::{
+    rows_from_records, SessionMemoryBoard, SessionMemoryBoardAction,
+};
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
 use crate::BlocklistAIHistoryModel;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -189,6 +193,11 @@ use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::auth::AuthClient;
+use crate::session_memory::model::SessionMemoryModel;
+use crate::session_memory::restore::{
+    agent_restore_plan, terminal_restore_plan, RestoreError, RestorePlan,
+};
+use crate::session_memory::types::{SessionMemoryRecord, SessionMemorySource};
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
     DefaultSessionMode, InputModeSettings,
@@ -806,8 +815,15 @@ enum NewSessionSidecarSelection {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SessionSidecarSelection {
-    NewSession { agent: CLIAgent, directory: PathBuf },
-    ResumeSession { agent: CLIAgent, directory: PathBuf, session_id: String },
+    NewSession {
+        agent: CLIAgent,
+        directory: PathBuf,
+    },
+    ResumeSession {
+        agent: CLIAgent,
+        directory: PathBuf,
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -1059,6 +1075,7 @@ pub struct Workspace {
     notification_mailbox_view: Option<ViewHandle<NotificationMailboxView>>,
     notification_toast_stack: Option<ViewHandle<AgentNotificationToastStack>>,
     lightbox_view: Option<ViewHandle<LightboxView>>,
+    session_memory_board: Option<ViewHandle<SessionMemoryBoard>>,
     hoa_onboarding_flow: Option<ViewHandle<HoaOnboardingFlow>>,
     /// Pinned position for the vertical tabs callout so it doesn't move when
     /// the user toggles between vertical and horizontal tabs.
@@ -1091,7 +1108,10 @@ pub struct Workspace {
     /// doesn't re-scan jsonl/sqlite. Invalidated by source-mtime change.
     sessions_cache: std::collections::HashMap<
         (CLIAgent, PathBuf),
-        (Option<std::time::SystemTime>, Vec<crate::workspace::agent_session_reader::AgentSessionEntry>),
+        (
+            Option<std::time::SystemTime>,
+            Vec<crate::workspace::agent_session_reader::AgentSessionEntry>,
+        ),
     >,
     worktree_sidecar_search_editor: ViewHandle<EditorView>,
     worktree_sidecar_search_query: String,
@@ -1949,7 +1969,10 @@ impl Workspace {
 
     fn build_sessions_sub_sidecar_menus(
         ctx: &mut ViewContext<Self>,
-    ) -> (ViewHandle<Menu<SessionSidecarSelection>>, ViewHandle<EditorView>) {
+    ) -> (
+        ViewHandle<Menu<SessionSidecarSelection>>,
+        ViewHandle<EditorView>,
+    ) {
         let sessions_sub_sidecar = ctx.add_typed_action_view(|_ctx| {
             Menu::<SessionSidecarSelection>::new()
                 .without_item_action_dispatch()
@@ -3331,6 +3354,7 @@ impl Workspace {
             free_tier_limit_hit_modal,
             free_tier_limit_check_triggered: false,
             lightbox_view: None,
+            session_memory_board: None,
             hoa_onboarding_flow: None,
             hoa_vtabs_callout_pinned_position: None,
             pending_pane_group_transfer: false,
@@ -9060,7 +9084,8 @@ impl Workspace {
             .unwrap_or(true);
         if needs_reload {
             let all = agent_session_reader::read_all_sessions(agent, &directory);
-            self.sessions_cache.insert(cache_key.clone(), (current_version, all));
+            self.sessions_cache
+                .insert(cache_key.clone(), (current_version, all));
         }
         let all = self
             .sessions_cache
@@ -9149,10 +9174,8 @@ impl Workspace {
             .update(ctx, |menu, view_ctx| menu.set_items(items, view_ctx));
         self.show_sessions_sub_sidecar = true;
 
-        let sidecar_rect = ctx.element_position_by_id_at_last_frame(
-            self.window_id,
-            SESSIONS_SUB_SIDECAR_POSITION_ID,
-        );
+        let sidecar_rect = ctx
+            .element_position_by_id_at_last_frame(self.window_id, SESSIONS_SUB_SIDECAR_POSITION_ID);
         self.new_session_sidecar_menu.update(ctx, |menu, _| {
             menu.set_safe_zone_target(sidecar_rect);
             menu.set_submenu_being_shown_for_item_index(Some(hovered_index));
@@ -16567,6 +16590,237 @@ impl Workspace {
         self.show_settings_with_section(None, ctx);
     }
 
+    fn open_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
+        self.close_palette(false, Some("workspace:show_session_memory"), ctx);
+        self.close_all_overlays(ctx);
+
+        let rows = rows_from_records(SessionMemoryModel::as_ref(ctx).records());
+        if let Some(board) = &self.session_memory_board {
+            board.update(ctx, |board, ctx| board.set_rows(rows, ctx));
+            ctx.focus(board);
+            ctx.notify();
+            return;
+        }
+
+        let board = ctx.add_typed_action_view(|_| SessionMemoryBoard::new(rows));
+        ctx.subscribe_to_view(&board, |me, _, event, ctx| {
+            me.handle_session_memory_board_action(event, ctx);
+        });
+
+        ctx.subscribe_to_model(&SessionMemoryModel::handle(ctx), |me, _, _event, ctx| {
+            if let Some(board) = &me.session_memory_board {
+                let rows = rows_from_records(SessionMemoryModel::as_ref(ctx).records());
+                board.update(ctx, |board, ctx| board.set_rows(rows, ctx));
+            }
+        });
+
+        ctx.focus(&board);
+        self.session_memory_board = Some(board);
+        ctx.notify();
+    }
+
+    fn close_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
+        self.session_memory_board = None;
+        self.focus_active_tab(ctx);
+        ctx.notify();
+    }
+
+    fn find_session_memory_record(
+        &self,
+        id: &str,
+        ctx: &AppContext,
+    ) -> Option<SessionMemoryRecord> {
+        SessionMemoryModel::as_ref(ctx)
+            .records()
+            .iter()
+            .find(|record| record.id == id)
+            .cloned()
+    }
+
+    fn handle_session_memory_board_action(
+        &mut self,
+        action: &SessionMemoryBoardAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match action {
+            SessionMemoryBoardAction::Restore(id) => {
+                self.restore_session_memory_record(id, false, ctx)
+            }
+            SessionMemoryBoardAction::RestoreInSplit(id) => {
+                self.restore_session_memory_record(id, true, ctx)
+            }
+            SessionMemoryBoardAction::CopyLastCommand(id) => {
+                self.copy_session_memory_last_command(id, ctx)
+            }
+            SessionMemoryBoardAction::OpenTranscript(id) => {
+                self.open_session_memory_transcript(id, ctx)
+            }
+            SessionMemoryBoardAction::Delete(id) => self.delete_session_memory_record(id, ctx),
+        }
+    }
+
+    fn restore_session_memory_record(
+        &mut self,
+        id: &str,
+        in_split: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(record) = self.find_session_memory_record(id, ctx) else {
+            self.show_session_memory_toast("Session memory record is no longer available.", ctx);
+            return;
+        };
+
+        let plan = match record.source {
+            SessionMemorySource::WarpTerminal => Ok(terminal_restore_plan(
+                &record,
+                *AISettings::as_ref(ctx).session_memory_auto_run_restored_commands,
+            )),
+            SessionMemorySource::ClaudeCode | SessionMemorySource::Codex => {
+                agent_restore_plan(&record)
+            }
+        };
+
+        let plan = match plan {
+            Ok(plan) => plan,
+            Err(err) => {
+                self.show_session_memory_toast(&Self::restore_error_message(err), ctx);
+                return;
+            }
+        };
+
+        let Some(terminal_view) = self.open_terminal_for_restore_plan(&plan, in_split, ctx) else {
+            self.show_session_memory_toast("Could not open a terminal for restore.", ctx);
+            return;
+        };
+
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            Self::apply_restore_plan_to_terminal(terminal_view, &plan, ctx);
+        });
+
+        self.close_session_memory_board(ctx);
+    }
+
+    fn open_terminal_for_restore_plan(
+        &mut self,
+        plan: &RestorePlan,
+        in_split: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ViewHandle<TerminalView>> {
+        if in_split {
+            let pane_group = self.active_tab_pane_group().clone();
+            let startup_directory = plan.cwd().map(PathBuf::from);
+            return pane_group.update(ctx, |pane_group, ctx| {
+                let pane_id = pane_group.split_focused_with_startup_directory(
+                    Direction::Right,
+                    startup_directory,
+                    ctx,
+                );
+                pane_group.terminal_view_from_pane_id(pane_id, ctx)
+            });
+        }
+
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                initial_directory: plan.cwd().map(PathBuf::from),
+                hide_homepage: true,
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+
+        self.active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+    }
+
+    fn apply_restore_plan_to_terminal(
+        terminal_view: &mut TerminalView,
+        plan: &RestorePlan,
+        ctx: &mut ViewContext<TerminalView>,
+    ) {
+        match plan {
+            RestorePlan::Terminal {
+                command_for_composer,
+                auto_run,
+                ..
+            } => {
+                if let Some(command) = command_for_composer {
+                    if *auto_run {
+                        terminal_view.execute_command_or_set_pending(command, ctx);
+                    } else {
+                        terminal_view.set_pending_command(command, ctx);
+                    }
+                }
+            }
+            RestorePlan::Agent { command, .. } => {
+                terminal_view.execute_command_or_set_pending(command, ctx);
+            }
+        }
+    }
+
+    fn copy_session_memory_last_command(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        let Some(record) = self.find_session_memory_record(id, ctx) else {
+            self.show_session_memory_toast("Session memory record is no longer available.", ctx);
+            return;
+        };
+
+        let Some(command) = record.last_command else {
+            self.show_session_memory_toast("No last command was captured for this session.", ctx);
+            return;
+        };
+
+        ctx.clipboard().write(ClipboardContent::plain_text(command));
+        self.show_session_memory_toast("Last command copied.", ctx);
+    }
+
+    fn open_session_memory_transcript(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        let Some(record) = self.find_session_memory_record(id, ctx) else {
+            self.show_session_memory_toast("Session memory record is no longer available.", ctx);
+            return;
+        };
+
+        let Some(path) = record.transcript_path else {
+            self.show_session_memory_toast("No transcript was captured for this session.", ctx);
+            return;
+        };
+
+        ctx.open_file_path(&path);
+        self.close_session_memory_board(ctx);
+    }
+
+    fn delete_session_memory_record(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        SessionMemoryModel::handle(ctx).update(ctx, |model, _| model.delete(id));
+        ctx.notify();
+    }
+
+    fn restore_error_message(err: RestoreError) -> String {
+        match err {
+            RestoreError::MissingWorkingDirectory(path) if path.as_os_str().is_empty() => {
+                "No working directory was captured for this session.".to_owned()
+            }
+            RestoreError::MissingWorkingDirectory(path) => {
+                format!(
+                    "The saved working directory no longer exists: {}",
+                    path.display()
+                )
+            }
+            RestoreError::MissingSessionId => {
+                "No native session id was captured for this agent session.".to_owned()
+            }
+            RestoreError::UnsupportedSource => {
+                "This session source cannot be restored as an agent session.".to_owned()
+            }
+        }
+    }
+
+    fn show_session_memory_toast(&mut self, message: &str, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(message.to_owned()), ctx);
+        });
+    }
+
     fn show_settings_with_section(
         &mut self,
         section: Option<SettingsSection>,
@@ -21291,6 +21545,8 @@ impl TypedActionView for Workspace {
                 self.show_keyboard_settings(keybinding_name.as_deref(), ctx)
             }
             ShowSettings => self.show_settings(ctx),
+            ShowSessionMemory => self.open_session_memory_board(ctx),
+            CloseSessionMemoryBoard => self.close_session_memory_board(ctx),
             ShowSettingsPage(section) => self.show_settings_with_section(Some(*section), ctx),
             ShowSettingsPageWithSearch {
                 search_query,
@@ -24038,6 +24294,17 @@ impl View for Workspace {
 
         if let Some(lightbox_view) = &self.lightbox_view {
             stack.add_child(ChildView::new(lightbox_view).finish());
+        }
+
+        if let Some(board) = &self.session_memory_board {
+            stack.add_child(
+                Dismiss::new(Align::new(ChildView::new(board).finish()).finish())
+                    .prevent_interaction_with_other_elements()
+                    .on_dismiss(|ctx, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::CloseSessionMemoryBoard);
+                    })
+                    .finish(),
+            );
         }
 
         if FeatureFlag::CreatingSharedSessions.is_enabled()

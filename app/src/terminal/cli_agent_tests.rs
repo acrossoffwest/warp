@@ -20,6 +20,7 @@ use crate::code_review::comments::{
 use crate::server::ids::ServerId;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::session_memory::types::AgentPermissionMode;
 use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
@@ -573,4 +574,34 @@ fn resume_command_format() {
         CLIAgent::Codex.resume_command(id),
         format!("codex --resume {id}")
     );
+}
+
+#[test]
+fn codex_resume_preserves_dangerous_permission_mode() {
+    let command = CLIAgent::Codex
+        .resume_command_preserving_permission("abc123", AgentPermissionMode::Dangerous);
+
+    assert_eq!(
+        command,
+        "codex --resume abc123 --dangerously-bypass-approvals-and-sandbox"
+    );
+}
+
+#[test]
+fn claude_resume_preserves_dangerous_permission_mode() {
+    let command = CLIAgent::Claude
+        .resume_command_preserving_permission("abc123", AgentPermissionMode::Dangerous);
+
+    assert_eq!(
+        command,
+        "claude --resume abc123 --dangerously-skip-permissions"
+    );
+}
+
+#[test]
+fn unknown_permission_mode_does_not_add_dangerous_flags() {
+    let command = CLIAgent::Codex
+        .resume_command_preserving_permission("abc123", AgentPermissionMode::Unknown);
+
+    assert_eq!(command, "codex --resume abc123");
 }

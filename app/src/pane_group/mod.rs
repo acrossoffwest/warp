@@ -119,12 +119,12 @@ use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectArgs};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::{self, PaneMode, PaneTemplateType};
 use crate::persistence::ModelEvent;
+use crate::remote_control::{
+    PaneCommandStatus, RemoteControlAgent, RemotePaneInfo, SendCommandMode,
+};
 use crate::report_if_error;
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipsCompleted,
-};
-use crate::remote_control::{
-    PaneCommandStatus, RemoteControlAgent, RemotePaneInfo, SendCommandMode,
 };
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::server::telemetry::{
@@ -6418,9 +6418,11 @@ impl PaneGroup {
 
         let (status, command, available_for_command) = match command_context {
             CommandContext::None => (PaneCommandStatus::Idle, None, true),
-            CommandContext::RunningCommand { running_command } => {
-                (PaneCommandStatus::RunningCommand, Some(running_command), false)
-            }
+            CommandContext::RunningCommand { running_command } => (
+                PaneCommandStatus::RunningCommand,
+                Some(running_command),
+                false,
+            ),
             CommandContext::LastRunCommand {
                 last_run_command, ..
             } => (PaneCommandStatus::LastCommand, Some(last_run_command), true),
@@ -6456,14 +6458,28 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) -> PaneId {
         let focused_pane_id = self.focused_pane_id(ctx);
-        let startup_directory = self.startup_path_for_new_session(
-            focused_pane_id.as_terminal_pane_id(),
-            ctx,
-        );
+        let startup_directory =
+            self.startup_path_for_new_session(focused_pane_id.as_terminal_pane_id(), ctx);
+        self.split_focused_with_startup_directory(direction, startup_directory, ctx)
+    }
+
+    pub(crate) fn split_focused_with_startup_directory(
+        &mut self,
+        direction: Direction,
+        startup_directory: Option<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) -> PaneId {
+        let focused_pane_id = self.focused_pane_id(ctx);
         let (pane_data, _view) =
             self.create_terminal_pane_data(startup_directory, HashMap::new(), None, None, ctx);
         let new_pane_id = PaneId::from(pane_data.terminal_pane_id());
-        let _ = self.add_pane(direction, Some(focused_pane_id), Box::new(pane_data), true, ctx);
+        let _ = self.add_pane(
+            direction,
+            Some(focused_pane_id),
+            Box::new(pane_data),
+            true,
+            ctx,
+        );
         new_pane_id
     }
 

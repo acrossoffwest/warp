@@ -384,6 +384,56 @@ fn test_toolbar_command_map_matched_agent() {
 }
 
 #[test]
+fn test_session_memory_settings_defaults() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(*settings.session_memory_enabled, true);
+            assert_eq!(
+                *settings.session_memory_show_recovery_board_on_startup,
+                true
+            );
+            assert_eq!(
+                *settings.session_memory_auto_restore_interrupted_sessions,
+                false
+            );
+            assert_eq!(*settings.session_memory_auto_run_restored_commands, false);
+            assert_eq!(*settings.session_memory_index_claude_code, true);
+            assert_eq!(*settings.session_memory_index_codex, true);
+        });
+    });
+}
+
+#[test]
+fn test_session_memory_settings_toml_paths() {
+    assert_eq!(
+        SessionMemoryEnabled::toml_path(),
+        Some("agents.session_memory.enabled")
+    );
+    assert_eq!(
+        SessionMemoryShowRecoveryBoardOnStartup::toml_path(),
+        Some("agents.session_memory.show_recovery_board_on_startup")
+    );
+    assert_eq!(
+        SessionMemoryAutoRestoreInterruptedSessions::toml_path(),
+        Some("agents.session_memory.auto_restore_interrupted_sessions")
+    );
+    assert_eq!(
+        SessionMemoryAutoRunRestoredCommands::toml_path(),
+        Some("agents.session_memory.auto_run_restored_commands")
+    );
+    assert_eq!(
+        SessionMemoryIndexClaudeCode::toml_path(),
+        Some("agents.session_memory.index_claude_code")
+    );
+    assert_eq!(
+        SessionMemoryIndexCodex::toml_path(),
+        Some("agents.session_memory.index_codex")
+    );
+}
+
+#[test]
 fn test_should_display_quota_reset_banner_with_empty_history() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

@@ -1,14 +1,20 @@
 use std::path::{Path, PathBuf};
 
+use crate::terminal::CLIAgent;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSessionEntry {
     pub session_id: String,
     pub title: String,
     pub updated_at: i64,
+    pub cwd: Option<PathBuf>,
+    pub transcript_path: Option<PathBuf>,
+    pub source: CLIAgent,
+    pub launch_argv: Option<Vec<String>>,
 }
 
 pub fn read_sessions(
-    agent: crate::terminal::CLIAgent,
+    agent: CLIAgent,
     directory: &Path,
     query: &str,
     limit: usize,
@@ -25,13 +31,10 @@ pub fn read_sessions(
 /// Returns the unfiltered, unlimited list of sessions for the given (agent,
 /// directory), sorted newest-first. Callers that want to cache should pair
 /// this with [`source_version`] to detect changes cheaply.
-pub fn read_all_sessions(
-    agent: crate::terminal::CLIAgent,
-    directory: &Path,
-) -> Vec<AgentSessionEntry> {
+pub fn read_all_sessions(agent: CLIAgent, directory: &Path) -> Vec<AgentSessionEntry> {
     match agent {
-        crate::terminal::CLIAgent::Claude => read_claude_sessions_all(directory),
-        crate::terminal::CLIAgent::Codex => read_codex_sessions_all(directory),
+        CLIAgent::Claude => read_claude_sessions_all(directory),
+        CLIAgent::Codex => read_codex_sessions_all(directory),
         _ => vec![],
     }
 }
@@ -39,18 +42,13 @@ pub fn read_all_sessions(
 /// Cheap stat used as a cache version. For Claude this is the project dir's
 /// mtime; for Codex the SQLite file's mtime. Returns `None` if the source
 /// is missing, which callers should treat as "always reload".
-pub fn source_version(
-    agent: crate::terminal::CLIAgent,
-    directory: &Path,
-) -> Option<std::time::SystemTime> {
+pub fn source_version(agent: CLIAgent, directory: &Path) -> Option<std::time::SystemTime> {
     match agent {
-        crate::terminal::CLIAgent::Claude => {
+        CLIAgent::Claude => {
             let project_dir = claude_projects_dir()?.join(claude_project_slug(directory));
             std::fs::metadata(&project_dir).ok()?.modified().ok()
         }
-        crate::terminal::CLIAgent::Codex => {
-            std::fs::metadata(codex_db_path()?).ok()?.modified().ok()
-        }
+        CLIAgent::Codex => std::fs::metadata(codex_db_path()?).ok()?.modified().ok(),
         _ => None,
     }
 }
@@ -83,14 +81,14 @@ fn read_claude_sessions_all(directory: &Path) -> Vec<AgentSessionEntry> {
         .flatten()
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("jsonl"))
         .filter(|e| e.metadata().map(|m| m.len() >= 100).unwrap_or(false))
-        .filter_map(|e| parse_claude_session(&e.path()))
+        .filter_map(|e| parse_claude_session(&e.path(), directory))
         .collect();
 
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     sessions
 }
 
-fn parse_claude_session(path: &Path) -> Option<AgentSessionEntry> {
+fn parse_claude_session(path: &Path, directory: &Path) -> Option<AgentSessionEntry> {
     const HEAD_LINES: usize = 200;
     let session_id = path.file_stem()?.to_string_lossy().into_owned();
     let content = std::fs::read_to_string(path).ok()?;
@@ -165,7 +163,15 @@ fn parse_claude_session(path: &Path) -> Option<AgentSessionEntry> {
         return None;
     }
 
-    Some(AgentSessionEntry { session_id, title, updated_at })
+    Some(AgentSessionEntry {
+        session_id,
+        title,
+        updated_at,
+        cwd: Some(directory.to_path_buf()),
+        transcript_path: Some(path.to_path_buf()),
+        source: CLIAgent::Claude,
+        launch_argv: None,
+    })
 }
 
 /// Returns a display-friendly title from a raw user-message body, or None
@@ -240,7 +246,52 @@ fn truncate(s: &str, max_chars: usize) -> String {
 }
 
 fn codex_db_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".codex").join("state_5.sqlite"))
+    codex_home_dir().map(|h| h.join("state_5.sqlite"))
+}
+
+fn codex_home_dir() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("CODEX_HOME") {
+        return Some(PathBuf::from(home));
+    }
+    dirs::home_dir().map(|h| h.join(".codex"))
+}
+
+fn codex_sessions_root() -> Option<PathBuf> {
+    codex_home_dir().map(|h| h.join("sessions"))
+}
+
+fn find_codex_transcript_path(sessions_root: &Path, session_id: &str) -> Option<PathBuf> {
+    if !sessions_root.exists() {
+        return None;
+    }
+    let suffix = format!("-{session_id}.jsonl");
+    for year_dir in read_subdirs(sessions_root) {
+        for month_dir in read_subdirs(&year_dir) {
+            for day_dir in read_subdirs(&month_dir) {
+                let entries = std::fs::read_dir(&day_dir).ok()?;
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    if name.starts_with("rollout-") && name.ends_with(&suffix) {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn read_subdirs(parent: &Path) -> impl Iterator<Item = PathBuf> {
+    std::fs::read_dir(parent)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            entry.file_type().ok()?.is_dir().then(|| entry.path())
+        })
 }
 
 #[derive(diesel::QueryableByName, Debug)]
@@ -269,6 +320,7 @@ fn read_codex_sessions_all(directory: &Path) -> Vec<AgentSessionEntry> {
     };
 
     let cwd = directory.to_string_lossy().into_owned();
+    let sessions_root = codex_sessions_root();
 
     let Ok(rows) = diesel::sql_query(
         "SELECT id, first_user_message, updated_at FROM threads WHERE cwd = ? ORDER BY updated_at DESC",
@@ -285,10 +337,17 @@ fn read_codex_sessions_all(directory: &Path) -> Vec<AgentSessionEntry> {
             if title.is_empty() {
                 return None;
             }
+            let transcript_path = sessions_root
+                .as_deref()
+                .and_then(|root| find_codex_transcript_path(root, &row.id));
             Some(AgentSessionEntry {
                 session_id: row.id,
                 title,
                 updated_at: row.updated_at,
+                cwd: Some(directory.to_path_buf()),
+                transcript_path,
+                source: CLIAgent::Codex,
+                launch_argv: None,
             })
         })
         .collect()
@@ -306,7 +365,7 @@ mod tests {
     #[test]
     #[ignore = "reads real ~/.claude/projects — run manually"]
     fn claude_sessions_found_for_warp() {
-        let sessions = read_claude_sessions(&warp_dir(), "", 10);
+        let sessions = read_sessions(CLIAgent::Claude, &warp_dir(), "", 10);
         assert!(
             !sessions.is_empty(),
             "expected at least one Claude session for warp dir"
@@ -323,8 +382,8 @@ mod tests {
     #[test]
     #[ignore = "reads real ~/.claude/projects — run manually"]
     fn claude_sessions_filter_works() {
-        let all = read_claude_sessions(&warp_dir(), "", 10);
-        let filtered = read_claude_sessions(&warp_dir(), "codex", 10);
+        let all = read_sessions(CLIAgent::Claude, &warp_dir(), "", 10);
+        let filtered = read_sessions(CLIAgent::Claude, &warp_dir(), "codex", 10);
         assert!(filtered.len() <= all.len());
         for s in &filtered {
             assert!(s.title.to_lowercase().contains("codex"));
@@ -334,11 +393,8 @@ mod tests {
     #[test]
     #[ignore = "reads real ~/.codex/state_5.sqlite — run manually"]
     fn codex_sessions_found_for_warp() {
-        let sessions = read_codex_sessions(&warp_dir(), "", 10);
-        assert!(
-            !sessions.is_empty(),
-            "expected Codex sessions for warp dir"
-        );
+        let sessions = read_sessions(CLIAgent::Codex, &warp_dir(), "", 10);
+        assert!(!sessions.is_empty(), "expected Codex sessions for warp dir");
         let first = &sessions[0];
         assert!(!first.session_id.is_empty());
         assert!(!first.title.is_empty());
@@ -363,10 +419,7 @@ mod tests {
     fn clean_user_title_filters_caveat_and_command_blocks() {
         assert_eq!(clean_user_title("<local-command-caveat>Caveat: ..."), None);
         assert_eq!(clean_user_title("Caveat: ignore this"), None);
-        assert_eq!(
-            clean_user_title("<command-name>/plan</command-name>"),
-            None
-        );
+        assert_eq!(clean_user_title("<command-name>/plan</command-name>"), None);
         assert_eq!(clean_user_title("   "), None);
         assert_eq!(
             clean_user_title("mcp для варп видишь?").as_deref(),
@@ -388,7 +441,51 @@ mod tests {
     #[test]
     fn empty_vec_for_unknown_agent() {
         let dir = PathBuf::from("/tmp");
-        let result = read_sessions(crate::terminal::CLIAgent::Gemini, &dir, "", 10);
+        let result = read_sessions(CLIAgent::Gemini, &dir, "", 10);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn claude_entry_includes_board_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript_path = tmp
+            .path()
+            .join("019e159b-717d-7663-9a93-95fd9c0790b1.jsonl");
+        let cwd = PathBuf::from("/Users/alice/projects/warp");
+        std::fs::write(
+            &transcript_path,
+            r#"{"type":"user","timestamp":"2026-07-07T12:34:56Z","message":{"content":[{"type":"text","text":"resume this board session"}]}}"#,
+        )
+        .unwrap();
+
+        let entry = parse_claude_session(&transcript_path, &cwd).unwrap();
+
+        assert_eq!(entry.cwd.as_deref(), Some(cwd.as_path()));
+        assert_eq!(
+            entry.transcript_path.as_deref(),
+            Some(transcript_path.as_path())
+        );
+        assert_eq!(entry.source, crate::terminal::CLIAgent::Claude);
+        assert_eq!(entry.launch_argv, None);
+    }
+
+    #[test]
+    fn codex_transcript_path_is_discovered_from_sessions_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session_id = "019e159b-717d-7663-9a93-95fd9c0790b1";
+        let transcript_path = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("07")
+            .join("07")
+            .join(format!("rollout-2026-07-07T12-34-56-{session_id}.jsonl"));
+        std::fs::create_dir_all(transcript_path.parent().unwrap()).unwrap();
+        std::fs::write(&transcript_path, "{}\n").unwrap();
+
+        assert_eq!(
+            find_codex_transcript_path(&tmp.path().join("sessions"), session_id).as_deref(),
+            Some(transcript_path.as_path())
+        );
     }
 }

@@ -12,6 +12,10 @@ use crate::{
     code::editor_management::CodeSource,
     notebooks::{CloudNotebook, CloudNotebookModel},
     persistence::{model::ObjectPermissions, BlockCompleted, ModelEvent, PersistenceScope},
+    persistence::{
+        AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+        SessionMemoryStatus,
+    },
     server::ids::ClientId,
     tab::SelectedTabColor,
     terminal::model::block::SerializedBlock,
@@ -20,7 +24,7 @@ use crate::{
 
 use super::{
     app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
-    encode_path, read_sqlite_data, save_app_state, setup_database,
+    encode_path, handle_model_event, read_sqlite_data, save_app_state, setup_database,
 };
 
 #[test]
@@ -377,6 +381,89 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
     assert_eq!(tabs[1].path, Some(PathBuf::from("/tmp/lib.rs")));
     assert_eq!(tabs[2].path, None);
     assert!(matches!(source, Some(CodeSource::FileTree { .. })));
+}
+
+#[test]
+fn session_memory_records_round_trip_and_lifecycle_events() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let record = SessionMemoryRecord {
+        id: "codex-abc123".to_string(),
+        source: SessionMemorySource::Codex,
+        kind: SessionMemoryKind::AgentChat,
+        status: SessionMemoryStatus::Blocked,
+        title: "Codex resume abc123".to_string(),
+        summary: Some("waiting for approval".to_string()),
+        cwd: Some(PathBuf::from("/tmp/warp-session-memory-test")),
+        project: Some("warp".to_string()),
+        native_session_id: Some("abc123".to_string()),
+        transcript_path: Some(PathBuf::from("/tmp/warp-session-memory-test/codex.jsonl")),
+        terminal_pane_uuid: Some(vec![1, 2, 3, 4]),
+        app_window_fingerprint: Some("window-a".to_string()),
+        app_tab_fingerprint: Some("tab-b".to_string()),
+        last_command: Some("cargo check -p warp".to_string()),
+        last_exit_code: Some(0),
+        launch_argv: Some(vec![
+            "codex".to_string(),
+            "--resume".to_string(),
+            "abc123".to_string(),
+            "--dangerously-bypass-approvals-and-sandbox".to_string(),
+        ]),
+        permission_mode: AgentPermissionMode::Dangerous,
+        last_seen_at: 1234,
+        started_at: Some(1200),
+        completed_at: None,
+        closed_intentionally_at: None,
+        restore_payload: Some(serde_json::json!({
+            "cwd": "/tmp/warp-session-memory-test",
+            "resume_id": "abc123"
+        })),
+    };
+
+    handle_model_event(
+        ModelEvent::UpsertSessionMemoryRecord {
+            record: record.clone(),
+        },
+        &mut conn,
+    )
+    .expect("session memory record should upsert");
+
+    let restored = read_sqlite_data(&mut conn, None).expect("app state should load");
+    assert_eq!(restored.session_memory_records, vec![record.clone()]);
+
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryRecordClosed {
+            id: record.id.clone(),
+            closed_intentionally_at: 1300,
+        },
+        &mut conn,
+    )
+    .expect("session memory record should mark closed");
+
+    let closed = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .session_memory_records
+        .pop()
+        .expect("record should remain after mark closed");
+    assert_eq!(closed.closed_intentionally_at, Some(1300));
+    assert_eq!(closed.status, SessionMemoryStatus::UserClosed);
+    assert_eq!(
+        closed.cwd,
+        Some(PathBuf::from("/tmp/warp-session-memory-test"))
+    );
+    assert_eq!(closed.launch_argv, record.launch_argv);
+    assert_eq!(closed.permission_mode, AgentPermissionMode::Dangerous);
+
+    handle_model_event(
+        ModelEvent::DeleteSessionMemoryRecord { id: record.id },
+        &mut conn,
+    )
+    .expect("session memory record should delete");
+
+    let restored = read_sqlite_data(&mut conn, None).expect("app state should load");
+    assert!(restored.session_memory_records.is_empty());
 }
 
 fn assert_encode_then_decode_preserves_original_path(original_path: PathBuf) {

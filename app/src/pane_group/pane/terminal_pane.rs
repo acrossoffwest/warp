@@ -1,7 +1,12 @@
 //! Implementation of terminal panes.
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
-use std::{collections::HashMap, sync::mpsc::SyncSender};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::mpsc::SyncSender,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use url::Url;
@@ -33,9 +38,12 @@ use crate::{
         HiddenChildAgentConversation, HiddenChildAgentConversationRequest,
     },
     pane_group::{self, Direction, Event::OpenConversationHistory, PaneGroup},
-    persistence::{BlockCompleted, ModelEvent},
+    persistence::{
+        AgentPermissionMode, BlockCompleted, ModelEvent, SessionMemoryKind, SessionMemoryRecord,
+        SessionMemorySource, SessionMemoryStatus,
+    },
     server::server_api::ai::{SpawnAgentRequest, UserQueryMode},
-    session_management::SessionNavigationData,
+    session_management::{CommandContext, SessionNavigationData},
     terminal::cli_agent_sessions::CLIAgentSessionsModel,
     terminal::{
         general_settings::GeneralSettings,
@@ -113,6 +121,25 @@ fn resolve_runtime_skills(
 
 fn serialize_proto_to_base64<M: prost::Message>(message: &M) -> String {
     BASE64_STANDARD.encode(message.encode_to_vec())
+}
+
+fn now_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+}
+
+fn terminal_last_command(command_context: CommandContext) -> Option<String> {
+    match command_context {
+        CommandContext::LastRunCommand {
+            last_run_command, ..
+        } => Some(last_run_command),
+        CommandContext::RunningCommand { running_command } => Some(running_command),
+        CommandContext::LastRunAIBlock { .. }
+        | CommandContext::RunningAIBlock { .. }
+        | CommandContext::None => None,
+    }
 }
 
 /// Overrides the child's preferred agent-mode LLM. `None` is a no-op
@@ -222,6 +249,98 @@ impl TerminalPane {
                     err
                 );
             }
+        }
+    }
+
+    fn session_memory_record_id(&self) -> String {
+        format!(
+            "warp_terminal:{}",
+            BASE64_STANDARD.encode(self.uuid.as_slice())
+        )
+    }
+
+    fn mark_session_memory_record_closed(&self, ctx: &AppContext) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session() {
+            return;
+        }
+
+        let Some(sender) = &self.model_event_sender else {
+            return;
+        };
+
+        let model_event = ModelEvent::MarkSessionMemoryRecordClosed {
+            id: self.session_memory_record_id(),
+            closed_intentionally_at: now_unix_seconds(),
+        };
+        if let Err(err) = sender.send(model_event) {
+            log::error!(
+                "Error sending session memory close event for terminal id {} {:?}",
+                self.terminal_view(ctx).id(),
+                err
+            );
+        }
+    }
+
+    fn upsert_session_memory_record(
+        &self,
+        snapshot: &TerminalPaneSnapshot,
+        last_command: Option<String>,
+        ctx: &AppContext,
+    ) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session() {
+            return;
+        }
+
+        let Some(sender) = &self.model_event_sender else {
+            return;
+        };
+
+        let restore_payload = snapshot
+            .shell_launch_data
+            .as_ref()
+            .and_then(|shell_launch_data| serde_json::to_value(shell_launch_data).ok())
+            .map(|shell_launch_data| {
+                serde_json::json!({
+                    "shell_launch_data": shell_launch_data,
+                })
+            });
+
+        let title = last_command
+            .clone()
+            .or_else(|| snapshot.cwd.clone())
+            .unwrap_or_else(|| "Terminal".to_string());
+
+        let record = SessionMemoryRecord {
+            id: self.session_memory_record_id(),
+            source: SessionMemorySource::WarpTerminal,
+            kind: SessionMemoryKind::Terminal,
+            status: SessionMemoryStatus::Live,
+            title,
+            summary: None,
+            cwd: snapshot.cwd.as_ref().map(PathBuf::from),
+            project: None,
+            native_session_id: None,
+            transcript_path: None,
+            terminal_pane_uuid: Some(self.uuid.clone()),
+            app_window_fingerprint: None,
+            app_tab_fingerprint: None,
+            last_command,
+            last_exit_code: None,
+            launch_argv: None,
+            permission_mode: AgentPermissionMode::Unknown,
+            last_seen_at: now_unix_seconds(),
+            started_at: None,
+            completed_at: None,
+            closed_intentionally_at: None,
+            restore_payload,
+        };
+
+        if let Err(err) = sender.send(ModelEvent::UpsertSessionMemoryRecord { record }) {
+            log::error!(
+                "Error sending session memory upsert event for terminal id {} {:?}",
+                self.terminal_view(ctx).id(),
+                err
+            );
         }
     }
 
@@ -371,6 +490,7 @@ impl PaneContent for TerminalPane {
         if matches!(detach_type, DetachType::Closed) {
             // Only immediately clear conversations and delete blocks if the session is being
             // permanently closed.
+            self.mark_session_memory_record_closed(ctx);
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model
                     .clear_conversations_in_terminal_view(self.terminal_view(ctx).id(), ctx);
@@ -511,7 +631,7 @@ impl PaneContent for TerminalPane {
                         .active_conversation_id()
                 });
 
-            LeafContents::Terminal(TerminalPaneSnapshot {
+            let snapshot = TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
                 cwd: view.pwd_if_local(app),
                 is_active,
@@ -522,7 +642,13 @@ impl PaneContent for TerminalPane {
                 active_profile_id,
                 conversation_ids_to_restore,
                 active_conversation_id,
-            })
+            };
+            self.upsert_session_memory_record(
+                &snapshot,
+                terminal_last_command(view.session_command_context(app)),
+                app,
+            );
+            LeafContents::Terminal(snapshot)
         }
     }
 

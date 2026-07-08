@@ -26,11 +26,13 @@ use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
-    AwsBedrockCredentialsEnabled, CanUseWarpCreditsWithByok, CodeSettings, CodebaseContextEnabled,
-    FileBasedMcpEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
-    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, OrchestrationEnabled, RuleSuggestionsEnabled,
-    ClaudeDangerouslySkipPermissions, CodexDangerouslyBypassApprovals,
+    AwsBedrockCredentialsEnabled, CanUseWarpCreditsWithByok, ClaudeDangerouslySkipPermissions,
+    CodeSettings, CodebaseContextEnabled, CodexDangerouslyBypassApprovals, FileBasedMcpEnabled,
+    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, IntelligentAutosuggestionsEnabled,
+    MemoryEnabled, NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled,
+    OrchestrationEnabled, RuleSuggestionsEnabled, SessionMemoryAutoRestoreInterruptedSessions,
+    SessionMemoryAutoRunRestoredCommands, SessionMemoryEnabled, SessionMemoryIndexClaudeCode,
+    SessionMemoryIndexCodex, SessionMemoryShowRecoveryBoardOnStartup,
     SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
@@ -2275,6 +2277,12 @@ pub enum AISettingsPageAction {
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
     ToggleAutoDismissRichInputAfterSubmit,
+    ToggleSessionMemoryEnabled,
+    ToggleSessionMemoryShowRecoveryBoardOnStartup,
+    ToggleSessionMemoryAutoRestoreInterruptedSessions,
+    ToggleSessionMemoryAutoRunRestoredCommands,
+    ToggleSessionMemoryIndexClaudeCode,
+    ToggleSessionMemoryIndexCodex,
     ToggleClaudeDangerouslySkipPermissions,
     ToggleCodexDangerouslyBypassApprovals,
     SetCLIAgentForCommand {
@@ -2551,6 +2559,52 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .auto_dismiss_rich_input_after_submit
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSessionMemoryEnabled => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.session_memory_enabled.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSessionMemoryShowRecoveryBoardOnStartup => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .session_memory_show_recovery_board_on_startup
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSessionMemoryAutoRestoreInterruptedSessions => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .session_memory_auto_restore_interrupted_sessions
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSessionMemoryAutoRunRestoredCommands => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .session_memory_auto_run_restored_commands
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSessionMemoryIndexClaudeCode => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .session_memory_index_claude_code
+                        .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleSessionMemoryIndexCodex => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .session_memory_index_codex
                         .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
@@ -5806,6 +5860,12 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    session_memory_enabled_toggle: SwitchStateHandle,
+    session_memory_show_recovery_board_on_startup_toggle: SwitchStateHandle,
+    session_memory_auto_restore_interrupted_sessions_toggle: SwitchStateHandle,
+    session_memory_auto_run_restored_commands_toggle: SwitchStateHandle,
+    session_memory_index_claude_code_toggle: SwitchStateHandle,
+    session_memory_index_codex_toggle: SwitchStateHandle,
     claude_dangerous_toggle: SwitchStateHandle,
     codex_dangerous_toggle: SwitchStateHandle,
 }
@@ -6071,6 +6131,80 @@ impl SettingsWidget for CLIAgentWidget {
             }
         }
 
+        column.add_child(
+            build_sub_header(
+                appearance,
+                "Session Memory",
+                Some(styles::header_font_color(true, app)),
+            )
+            .with_padding_top(HEADER_PADDING)
+            .with_padding_bottom(HEADER_PADDING)
+            .finish(),
+        );
+        column.add_child(render_ai_setting_toggle::<SessionMemoryEnabled>(
+            "Track local terminal and coding agent sessions",
+            AISettingsPageAction::ToggleSessionMemoryEnabled,
+            *ai_settings.session_memory_enabled,
+            true,
+            self.session_memory_enabled_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<
+            SessionMemoryShowRecoveryBoardOnStartup,
+        >(
+            "Show recovery board on startup",
+            AISettingsPageAction::ToggleSessionMemoryShowRecoveryBoardOnStartup,
+            *ai_settings.session_memory_show_recovery_board_on_startup,
+            true,
+            self.session_memory_show_recovery_board_on_startup_toggle
+                .clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<
+            SessionMemoryAutoRestoreInterruptedSessions,
+        >(
+            "Automatically restore interrupted sessions",
+            AISettingsPageAction::ToggleSessionMemoryAutoRestoreInterruptedSessions,
+            *ai_settings.session_memory_auto_restore_interrupted_sessions,
+            true,
+            self.session_memory_auto_restore_interrupted_sessions_toggle
+                .clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<
+            SessionMemoryAutoRunRestoredCommands,
+        >(
+            "Run restored commands automatically",
+            AISettingsPageAction::ToggleSessionMemoryAutoRunRestoredCommands,
+            *ai_settings.session_memory_auto_run_restored_commands,
+            true,
+            self.session_memory_auto_run_restored_commands_toggle
+                .clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<SessionMemoryIndexClaudeCode>(
+            "Index Claude Code sessions",
+            AISettingsPageAction::ToggleSessionMemoryIndexClaudeCode,
+            *ai_settings.session_memory_index_claude_code,
+            true,
+            self.session_memory_index_claude_code_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(render_ai_setting_toggle::<SessionMemoryIndexCodex>(
+            "Index Codex sessions",
+            AISettingsPageAction::ToggleSessionMemoryIndexCodex,
+            *ai_settings.session_memory_index_codex,
+            true,
+            self.session_memory_index_codex_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+
         // Per-agent dangerous-flag opt-ins. Always visible, independent of
         // the toolbar setting — they control how `+ > Claude Code` and
         // `+ > Codex` build their launch command.
@@ -6084,15 +6218,17 @@ impl SettingsWidget for CLIAgentWidget {
             .with_padding_bottom(HEADER_PADDING)
             .finish(),
         );
-        column.add_child(render_ai_setting_toggle::<ClaudeDangerouslySkipPermissions>(
-            "Claude Code: --dangerously-skip-permissions",
-            AISettingsPageAction::ToggleClaudeDangerouslySkipPermissions,
-            *ai_settings.claude_dangerously_skip_permissions,
-            true,
-            self.claude_dangerous_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        ));
+        column.add_child(
+            render_ai_setting_toggle::<ClaudeDangerouslySkipPermissions>(
+                "Claude Code: --dangerously-skip-permissions",
+                AISettingsPageAction::ToggleClaudeDangerouslySkipPermissions,
+                *ai_settings.claude_dangerously_skip_permissions,
+                true,
+                self.claude_dangerous_toggle.clone(),
+                &view.local_only_icon_tooltip_states,
+                app,
+            ),
+        );
         column.add_child(render_ai_setting_toggle::<CodexDangerouslyBypassApprovals>(
             "Codex: --dangerously-bypass-approvals-and-sandbox",
             AISettingsPageAction::ToggleCodexDangerouslyBypassApprovals,

@@ -1214,6 +1214,66 @@ define_settings_group!(AISettings, settings: [
         description: "Whether to show the \"Use Agent\" footer for terminal commands.",
     }
 
+    session_memory_enabled: SessionMemoryEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.session_memory.enabled",
+        description: "Track local terminal and CLI agent sessions for restore.",
+    }
+
+    session_memory_show_recovery_board_on_startup: SessionMemoryShowRecoveryBoardOnStartup {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.session_memory.show_recovery_board_on_startup",
+        description: "Show the Session Memory recovery board when interrupted sessions exist.",
+    }
+
+    session_memory_auto_restore_interrupted_sessions: SessionMemoryAutoRestoreInterruptedSessions {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.session_memory.auto_restore_interrupted_sessions",
+        description: "Automatically restore interrupted session layouts on startup.",
+    }
+
+    session_memory_auto_run_restored_commands: SessionMemoryAutoRunRestoredCommands {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.session_memory.auto_run_restored_commands",
+        description: "Run restored commands automatically after restoring panes.",
+    }
+
+    session_memory_index_claude_code: SessionMemoryIndexClaudeCode {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.session_memory.index_claude_code",
+        description: "Index local Claude Code sessions in Session Memory.",
+    }
+
+    session_memory_index_codex: SessionMemoryIndexCodex {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.session_memory.index_codex",
+        description: "Index local Codex sessions in Session Memory.",
+    }
+
     // Whether to render the CLI agent footer for commands like Claude, Codex, Gemini, etc.
     // This is independent of the "Use Agent" footer setting.
     should_render_cli_agent_footer: ShouldRenderCLIAgentToolbar {
