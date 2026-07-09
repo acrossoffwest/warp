@@ -8,13 +8,14 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent, AgentInteractionMetadata,
-    AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason,
-    CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
-    ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent,
-    ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit,
+    detect_possible_git_repo, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
+    AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
+    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
+    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
+    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
@@ -261,8 +262,30 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| match event {
-            ActiveSessionEvent::UpdatedPwd => ctx.notify(),
+        ctx.subscribe_to_model(&active_session, |view, _, event, ctx| match event {
+            ActiveSessionEvent::UpdatedPwd => {
+                // Run repo detection so project rules and skills follow the
+                // session's working directory (the GUI's equivalent lives in
+                // `TerminalView::apply_block_metadata_update`). The first
+                // post-bootstrap precmd metadata transitions the cwd from
+                // `None` to `Some`, so this also covers the launch directory.
+                // Only the `DetectedGitRepo` event side effect is needed
+                // here, so the detection-result future is dropped.
+                if let Some(cwd) = view
+                    .active_session
+                    .as_ref(ctx)
+                    .current_working_directory()
+                    .cloned()
+                {
+                    std::mem::drop(detect_possible_git_repo(
+                        RepoDetectionSessionType::Local,
+                        &cwd,
+                        RepoDetectionSource::TerminalNavigation,
+                        ctx,
+                    ));
+                }
+                ctx.notify();
+            }
             ActiveSessionEvent::Bootstrapped => {}
         });
 
