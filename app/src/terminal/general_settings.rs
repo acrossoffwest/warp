@@ -15,6 +15,15 @@ define_settings_group!(GeneralSettings, settings: [
         toml_path: "general.show_warning_before_quitting",
         description: "Whether to show a warning dialog before quitting Warp.",
     },
+    hold_cmd_q_to_quit: HoldCmdQToQuit {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "general.hold_cmd_q_to_quit",
+        description: "Whether ⌘Q must be held for two seconds to quit Warp.",
+    },
     quit_on_last_window_closed: QuitOnLastWindowClosed {
         type: bool,
         default: false,

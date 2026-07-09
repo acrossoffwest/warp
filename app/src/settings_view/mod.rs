@@ -408,6 +408,7 @@ pub mod flags {
     pub const CRASH_REPORTING_FLAG: &str = "crash_reporting";
     pub const DIM_INACTIVE_PANES_FLAG: &str = "Dim_Inactive_Panes";
     pub const QUIT_WARNING_MODAL: &str = "Quit_Warning_Modal";
+    pub const HOLD_CMD_Q_TO_QUIT: &str = "Hold_Cmd_Q_To_Quit";
     pub const BLOCK_DIVIDERS_CONTEXT_FLAG: &str = "Block_Dividers_Enabled";
 
     pub const LOG_OUT_WARNING_MODAL: &str = "Log_Out_Warning_Modal";

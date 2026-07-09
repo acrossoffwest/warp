@@ -336,6 +336,22 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
+            "hold cmd-q to quit",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleHoldCmdQToQuit,
+            )),
+            context,
+            flags::HOLD_CMD_Q_TO_QUIT,
+        )
+        .is_supported_on_current_platform(
+            GeneralSettings::as_ref(app)
+                .hold_cmd_q_to_quit
+                .is_supported_on_current_platform(),
+        ),
+    );
+
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
             "alias expansion",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleAliasExpansion,
@@ -618,6 +634,7 @@ pub enum FeaturesPageAction {
     ToggleNotificationSound,
     SetNotificationToastDuration,
     ToggleShowWarningBeforeQuitting,
+    ToggleHoldCmdQToQuit,
     ToggleLoginItem,
     ToggleQuitOnLastWindowClosed,
     ToggleSmartSelection,
@@ -966,6 +983,10 @@ impl FeaturesPageAction {
                         .notifications
                         .play_notification_sound,
                 ),
+            },
+            Self::ToggleHoldCmdQToQuit => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleHoldCmdQToQuit".to_string(),
+                value: to_string(*GeneralSettings::as_ref(ctx).hold_cmd_q_to_quit.value()),
             },
             Self::ToggleShowWarningBeforeQuitting => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleShowWarningBeforeQuitting".to_string(),
@@ -1683,6 +1704,9 @@ impl TypedActionView for FeaturesPageView {
                         .toggle_and_save_value(ctx));
                 })
             }
+            ToggleHoldCmdQToQuit => GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.hold_cmd_q_to_quit.toggle_and_save_value(ctx));
+            }),
             ToggleSmartSelection => {
                 SemanticSelection::handle(ctx).update(ctx, |selection, ctx| {
                     report_if_error!(selection.smart_select_enabled.toggle_and_save_value(ctx));

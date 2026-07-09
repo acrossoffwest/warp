@@ -422,6 +422,7 @@ use std::collections::{HashMap, HashSet};
 #[cfg(feature = "local_fs")]
 use std::convert::TryFrom;
 use std::time::Duration;
+use std::time::Instant;
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
 use warp_core::context_flag::ContextFlag;
@@ -1039,6 +1040,10 @@ pub struct Workspace {
     free_tier_limit_hit_modal: ViewHandle<FreeTierLimitHitModal>,
     free_tier_limit_check_triggered: bool,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
+    /// Active "hold cmd-q to quit" gesture, if any.
+    hold_to_quit: Option<crate::hold_to_quit::HoldToQuitState>,
+    /// Invalidates stale hold-to-quit timers after a cancelled gesture.
+    hold_to_quit_epoch: usize,
     agent_toast_stack: ViewHandle<AgentToastStack>,
     update_toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
     /// We need to render some dynamic keybindings for our tooltips. These cannot be looked up in the
@@ -3308,6 +3313,8 @@ impl Workspace {
             import_modal,
             window_id: ctx.window_id(),
             toast_stack,
+            hold_to_quit: None,
+            hold_to_quit_epoch: 0,
             agent_toast_stack,
             update_toast_stack,
             cached_keybindings,
@@ -20726,6 +20733,126 @@ impl Workspace {
 
     /// Offset positioning for global toasts.
     // TODO: update positioning based on input mode.
+    fn start_hold_to_quit(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.hold_to_quit.is_some() {
+            // Key-repeat while the gesture is already in progress.
+            return;
+        }
+        self.hold_to_quit = Some(crate::hold_to_quit::HoldToQuitState::new(Instant::now()));
+        self.hold_to_quit_epoch += 1;
+        self.schedule_hold_to_quit_tick(ctx);
+        ctx.notify();
+    }
+
+    fn schedule_hold_to_quit_tick(&mut self, ctx: &mut ViewContext<Self>) {
+        let epoch = self.hold_to_quit_epoch;
+        let _ = ctx.spawn(
+            async move {
+                warpui::r#async::Timer::after(crate::hold_to_quit::TICK_INTERVAL).await;
+                epoch
+            },
+            Self::hold_to_quit_tick,
+        );
+    }
+
+    fn hold_to_quit_tick(&mut self, epoch: usize, ctx: &mut ViewContext<Self>) {
+        if epoch != self.hold_to_quit_epoch {
+            return;
+        }
+        let Some(state) = &self.hold_to_quit else {
+            return;
+        };
+        if !crate::hold_to_quit::is_cmd_q_physically_held() {
+            self.hold_to_quit = None;
+            self.hold_to_quit_epoch += 1;
+            ctx.notify();
+            return;
+        }
+        if state.is_complete(Instant::now()) {
+            self.hold_to_quit = None;
+            self.hold_to_quit_epoch += 1;
+            ctx.notify();
+            // Holding through the delay is explicit intent: skip the confirm
+            // dialog. ForceTerminate still runs the terminate callbacks, so
+            // persistence flushes and the session-memory run is marked clean.
+            ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            return;
+        }
+        ctx.notify();
+        self.schedule_hold_to_quit_tick(ctx);
+    }
+
+    /// Centered pill with a progress bar shown while the "hold cmd-q to
+    /// quit" gesture is active.
+    fn render_hold_to_quit_overlay(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let Some(state) = &self.hold_to_quit else {
+            return Empty::new().finish();
+        };
+        const PILL_WIDTH: f32 = 320.;
+        const BAR_WIDTH: f32 = PILL_WIDTH - 48.;
+        const BAR_HEIGHT: f32 = 6.;
+        let progress = state.progress(Instant::now());
+        let theme = appearance.theme();
+
+        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        column.add_child(
+            Container::new(
+                Text::new_inline("\u{2318}Q", appearance.ui_font_family(), 28.)
+                    .with_color(PhenomenonStyle::body_text())
+                    .with_style(Properties::default().weight(Weight::Bold))
+                    .finish(),
+            )
+            .with_margin_bottom(6.)
+            .finish(),
+        );
+        column.add_child(
+            Container::new(
+                Text::new_inline("Keep holding to quit", appearance.ui_font_family(), 14.)
+                    .with_color(PhenomenonStyle::body_text())
+                    .finish(),
+            )
+            .with_margin_bottom(16.)
+            .finish(),
+        );
+
+        let mut bar = Stack::new();
+        bar.add_child(
+            ConstrainedBox::new(
+                Rect::new()
+                    .with_background(theme.background())
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BAR_HEIGHT / 2.)))
+                    .finish(),
+            )
+            .with_width(BAR_WIDTH)
+            .with_height(BAR_HEIGHT)
+            .finish(),
+        );
+        bar.add_child(
+            ConstrainedBox::new(
+                Rect::new()
+                    .with_background(theme.accent())
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BAR_HEIGHT / 2.)))
+                    .finish(),
+            )
+            .with_width((BAR_WIDTH * progress).max(BAR_HEIGHT))
+            .with_height(BAR_HEIGHT)
+            .finish(),
+        );
+        column.add_child(bar.finish());
+
+        ConstrainedBox::new(
+            Container::new(column.finish())
+                .with_uniform_padding(24.)
+                .with_background(theme.surface_1())
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(12.)))
+                .with_border(Border::all(1.).with_border_fill(theme.surface_3()))
+                .with_drop_shadow(warpui::prelude::DropShadow::default())
+                .finish(),
+        )
+        .with_width(PILL_WIDTH)
+        .finish()
+    }
+
     fn global_toast_positioning(&self) -> OffsetPositioning {
         OffsetPositioning::offset_from_save_position_element(
             TAB_CONTENT_POSITION_ID,
@@ -20942,6 +21069,10 @@ impl Workspace {
 
         if *general_settings.show_warning_before_quitting.value() {
             context.set.insert(flags::QUIT_WARNING_MODAL);
+        }
+
+        if *general_settings.hold_cmd_q_to_quit.value() {
+            context.set.insert(flags::HOLD_CMD_Q_TO_QUIT);
         }
 
         if semantic_selection_settings.smart_select_enabled() {
@@ -22609,7 +22740,13 @@ impl TypedActionView for Workspace {
                 });
             }
             TerminateApp => {
-                ctx.terminate_app(TerminationMode::Cancellable, None);
+                if cfg!(target_os = "macos")
+                    && *GeneralSettings::as_ref(ctx).hold_cmd_q_to_quit.value()
+                {
+                    self.start_hold_to_quit(ctx);
+                } else {
+                    ctx.terminate_app(TerminationMode::Cancellable, None);
+                }
             }
             CloseWindow => {
                 if ContextFlag::CloseWindow.is_enabled() {
@@ -24707,6 +24844,19 @@ impl View for Workspace {
             ChildView::new(&self.toast_stack).finish(),
             self.global_toast_positioning(),
         );
+
+        if self.hold_to_quit.is_some() {
+            stack.add_positioned_overlay_child(
+                self.render_hold_to_quit_overlay(&appearance),
+                OffsetPositioning::offset_from_save_position_element(
+                    TAB_CONTENT_POSITION_ID,
+                    vec2f(0., 0.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
 
         // Render agent toast stack (for agent-related notifications) if popup is not open
         if FeatureFlag::HOANotifications.is_enabled()

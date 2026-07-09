@@ -935,6 +935,7 @@ pub fn init(app: &mut AppContext) {
             "Quit Warp",
             WorkspaceAction::TerminateApp,
         )
+        .with_mac_key_binding("cmd-q")
         .with_context_predicate(id!("Workspace"))
         .with_group(bindings::BindingGroup::Close.as_str())
         .with_enabled(|| ContextFlag::CloseWindow.is_enabled()),
