@@ -69,3 +69,7 @@ __pycache__/
 
 # Project notes
 .note/
+
+# Local agent tooling state
+.serena/
+docs/agent-sessions-summary.md
