@@ -41,8 +41,12 @@ jobs:
         with:
           shared-key: oss-${{ matrix.runner }}
 
-      - name: Bootstrap build dependencies
-        run: ./script/macos/bootstrap
+      - name: Install build dependencies
+        # script/macos/bootstrap requires gcloud auth (Warp-internal infra);
+        # install only what the bundle script actually needs.
+        run: |
+          brew install protobuf
+          cargo install cargo-bundle --git=https://github.com/burtonageo/cargo-bundle --rev ae4c76e92c08774bf54ff077b1c52e3d1cd6c16d
 
       - name: Build bundle
         run: ./script/bundle --channel oss --nosign --nouniversal

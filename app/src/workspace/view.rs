@@ -338,7 +338,6 @@ use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent};
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::AvailableShell;
-#[cfg(target_os = "windows")]
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
@@ -353,7 +352,6 @@ use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::workflows::manager::WorkflowManager;
 use crate::workflows::workflow::Workflow;
-#[cfg(feature = "local_fs")]
 #[cfg(target_family = "wasm")]
 use url::Url;
 
@@ -386,8 +384,6 @@ use crate::cloud_object::{
 };
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::{add_color, remove_color};
-#[cfg(feature = "local_fs")]
-#[cfg(feature = "local_fs")]
 use crate::context_chips::ChipRuntimeCapabilities;
 use crate::drive::import::modal::{ImportModal, ImportModalEvent};
 use crate::drive::workflows::arguments::ArgumentsState;
@@ -530,9 +526,7 @@ use crate::workspace::toast_stack::{
 use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
 use crate::{settings, ui_components::blended_colors};
 
-#[cfg(feature = "local_fs")]
 use std::time::Instant;
-#[cfg(target_os = "macos")]
 use warp_core::user_preferences::GetUserPreferences as _;
 #[cfg(target_family = "wasm")]
 use warpui::elements::Percentage;
@@ -553,10 +547,6 @@ use crate::tab_configs::{
     NewWorktreeModal, NewWorktreeModalEvent, TabConfigParamsModal, TabConfigParamsModalEvent,
 };
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
-#[cfg(target_os = "windows")]
-use crate::terminal::available_shells::AvailableShells;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::enable_auto_reload_modal::{};
 use crate::terminal::general_settings::GeneralSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
@@ -572,8 +562,6 @@ use crate::terminal::resizable_data::{
     ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
 };
 use crate::terminal::shared_session::SharedSessionActionSource;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::terminal::view::ambient_agent::{};
 use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::view::load_ai_conversation::RestoreConversationEntryBehavior;
@@ -583,8 +571,6 @@ use crate::ui_components::icons;
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 #[cfg(feature = "local_fs")]
-use crate::user_config::{};
-#[cfg(feature = "local_fs")]
 #[cfg(feature = "local_fs")]
 #[cfg(feature = "local_fs")]
 #[cfg(feature = "local_fs")]
@@ -593,7 +579,6 @@ use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 use crate::view_components::action_button::ActionButton;
 #[cfg(target_family = "wasm")]
 use crate::wasm_nux_dialog::WasmNUXDialog;
-#[cfg(target_os = "macos")]
 use crate::workspace::cross_window_tab_drag::{
     AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
 };

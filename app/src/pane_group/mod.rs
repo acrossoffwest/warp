@@ -65,7 +65,6 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::Space;
-#[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::code::view::CodeViewAction;
 use crate::code_review::comments::{AttachedReviewComment, PendingImportedReviewComment};
@@ -102,8 +101,6 @@ use crate::workflows::workflow::Workflow;
 use lazy_static::lazy_static;
 
 use warp_core::HostId;
-#[cfg(feature = "local_fs")]
-use warpui::elements::{};
 
 use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
@@ -146,7 +143,6 @@ use crate::server::telemetry::{
 };
 use crate::session_management::{CommandContext, SessionNavigationData};
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-#[cfg(not(target_family = "wasm"))]
 use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
@@ -186,7 +182,6 @@ use settings::Setting as _;
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::update_browser_url;
 use crate::util::bindings::{is_binding_pty_compliant, CustomAction};
-#[cfg(feature = "local_fs")]
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::{

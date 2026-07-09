@@ -1,7 +1,6 @@
 //! Implementation of terminal panes.
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
-#[cfg(not(target_family = "wasm"))]
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 #[cfg(not(target_family = "wasm"))]
@@ -84,12 +83,9 @@ use crate::ai::ambient_agents::task::normalize_orchestrator_agent_name;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewControllerEvent;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
-#[cfg(feature = "local_fs")]
 use crate::ai::conversation_utils;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::pane_group::child_agent::ErrorChildAgentConversationRequest;
-#[cfg(feature = "local_fs")]
-#[cfg(not(target_family = "wasm"))]
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::shared_session::SharedSessionSource;
 use crate::terminal::view::ambient_agent::should_disable_snapshot;
