@@ -524,8 +524,8 @@ use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
 use crate::{
-    autoupdate, report_if_error, send_telemetry_from_ctx, settings, AgentNotificationsModel,
-    BlocklistAIHistoryModel, GlobalResourceHandles, TelemetryEvent,
+    autoupdate, report_error, report_if_error, send_telemetry_from_ctx, settings,
+    AgentNotificationsModel, BlocklistAIHistoryModel, GlobalResourceHandles, TelemetryEvent,
 };
 
 /// The padding that should be applied to the workspace as a whole.
@@ -2197,7 +2197,7 @@ impl Workspace {
         _event: &RemoveTabConfigConfirmationEvent,
         _ctx: &mut ViewContext<Self>,
     ) {
-        log::error!("Cannot delete a tab config from the web");
+        report_error!("Cannot delete a tab config from the web");
     }
 
     fn handle_session_config_modal_event(
@@ -4392,7 +4392,7 @@ impl Workspace {
             },
             move |me, cloud_conversation, ctx| {
                 let Some(cloud_conversation) = cloud_conversation else {
-                    log::error!("Failed to load conversation from server");
+                    report_error!("Failed to load conversation from server");
                     me.toast_stack.update(ctx, |view, ctx| {
                         let new_toast = DismissibleToast::error(
                             "Failed to load conversation data.".to_string(),
@@ -6276,7 +6276,7 @@ impl Workspace {
                         });
                         return;
                     } else {
-                        log::error!(
+                        report_error!(
                             "Could not get terminal view handle for new pane when attempting to open file with $EDITOR."
                         );
                     }
@@ -6493,7 +6493,7 @@ impl Workspace {
                 }
                 Ok(Err(err)) => {
                     let error_message = format!("Failed to create log bundle: {err}");
-                    log::error!("{error_message}");
+                    report_error!(err.context("Failed to create log bundle"));
                     me.toast_stack.update(ctx, |toast_stack, ctx| {
                         let toast = DismissibleToast::error(error_message);
                         toast_stack.add_persistent_toast(toast, ctx);
@@ -6501,7 +6501,7 @@ impl Workspace {
                 }
                 Err(err) => {
                     let error_message = format!("Failed to create log bundle: {err}");
-                    log::error!("{error_message}");
+                    report_error!(anyhow::Error::new(err).context("Failed to create log bundle"));
                     me.toast_stack.update(ctx, |toast_stack, ctx| {
                         let toast = DismissibleToast::error(error_message);
                         toast_stack.add_persistent_toast(toast, ctx);
@@ -7959,7 +7959,7 @@ impl Workspace {
     }
 
     fn trigger_agent_onboarding(&self, ctx: &mut ViewContext<Self>) {
-        log::error!(
+        report_error!(
             "Triggering agent onboarding callout flow but not during initial login. This should not normally happen."
         );
         let version = if FeatureFlag::AgentView.is_enabled() {
@@ -11152,7 +11152,7 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(pane_group_view) = self.get_pane_group_view_with_id(pane_group_id) else {
-            log::error!("Could not close pane because pane group doesn't exist");
+            report_error!("Could not close pane because pane group doesn't exist");
             return;
         };
         pane_group_view.update(ctx, |pane_group, ctx| {
@@ -11179,9 +11179,9 @@ impl Workspace {
                     if let Err(e) = SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
                         settings.should_confirm_close_session.set_value(false, ctx)
                     }) {
-                        log::error!(
-                            "Failed to set should_confirm_close_session setting to false: {e}"
-                        );
+                        report_error!(e.context(
+                            "Failed to set should_confirm_close_session setting to false"
+                        ));
                     };
                 }
                 match *open_confirmation_source {
@@ -12273,7 +12273,7 @@ impl Workspace {
             let sbx_future = resolve_sbx_path_from_user_shell(ctx);
             ctx.spawn(sbx_future, move |me, sbx_path, ctx| {
                 let Some(sbx_path) = sbx_path else {
-                    log::error!("sbx binary not found; cannot create Docker sandbox");
+                    report_error!("sbx binary not found; cannot create Docker sandbox");
                     return;
                 };
                 let shell = AvailableShell::new_docker_sandbox_shell(
@@ -12706,7 +12706,7 @@ impl Workspace {
             .as_ref(ctx)
             .active_session_view(ctx)
         else {
-            log::error!("Could not access terminal view after creating a new tab!");
+            report_error!("Could not access terminal view after creating a new tab!");
             return;
         };
         terminal_view.update(ctx, |terminal_view, ctx| {
@@ -13351,7 +13351,7 @@ impl Workspace {
                     .as_ref(ctx)
                     .terminal_view_from_pane_id(new_pane_id, ctx)
                 else {
-                    log::error!(
+                    report_error!(
                         "Could not get terminal view handle when continuing third-party conversation locally."
                     );
                     return;
@@ -13417,7 +13417,10 @@ impl Workspace {
 
         ctx.spawn(future, move |workspace, source_conversation, ctx| {
             let Some(CloudConversationData::Oz(source_conversation)) = source_conversation else {
-                log::error!("Failed to load Oz conversation {conversation_id} for forking.");
+                report_error!(
+                    "Failed to load Oz conversation for forking.",
+                    extra: { "conversation_id" => %conversation_id }
+                );
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast = DismissibleToast::error(
                         "Failed to load conversation for forking.".to_owned(),
@@ -13537,7 +13540,7 @@ impl Workspace {
         let mut forked_conversation = match fork_result {
             Ok(forked_conversation) => forked_conversation,
             Err(e) => {
-                log::error!("Conversation forking failed. {e}.");
+                report_error!(e.context("Conversation forking failed"));
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast = DismissibleToast::error("Conversation forking failed.".to_owned());
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
@@ -14057,15 +14060,20 @@ impl Workspace {
                         let url = NOTIFICATIONS_TROUBLESHOOT_URL.to_string();
                         view.toast_stack.update(ctx, |toast_stack, ctx| {
                             let toast = DismissibleToast::error(
-                                "Warp doesn't have permission to send desktop notifications.".to_string(),
+                                "Warp doesn't have permission to send desktop notifications."
+                                    .to_string(),
                             )
-                            .with_link(ToastLink::new("Troubleshoot notifications".to_string()).with_href(url));
+                            .with_link(
+                                ToastLink::new("Troubleshoot notifications".to_string())
+                                    .with_href(url),
+                            );
                             toast_stack.add_persistent_toast(toast, ctx);
                         });
                     }
                     RequestPermissionsOutcome::OtherError { error_message } => {
-                        log::error!(
-                            "Unknown error when requesting notification permissions. error_msg: {error_message}"
+                        report_error!(
+                            "Unknown error when requesting notification permissions",
+                            extra: { "error_message" => %error_message }
                         );
                     }
                 }
@@ -14100,7 +14108,7 @@ impl Workspace {
                 ..current_settings
             };
             if let Err(e) = settings.notifications.set_value(new_notifications, ctx) {
-                log::error!("Error persisting notifications setting: {e}");
+                report_error!(e.context("Error persisting notifications setting"));
             }
         });
     }
@@ -15897,8 +15905,9 @@ impl Workspace {
                             if let NotificationSendError::Other { error_message } =
                                 &notification_error
                             {
-                                log::error!(
-                                    "Unknown error when sending notification. error_msg: {error_message}"
+                                report_error!(
+                                    "Unknown error when sending notification",
+                                    extra: { "error_message" => %error_message }
                                 );
                             }
                             send_telemetry_from_ctx!(
@@ -17164,7 +17173,7 @@ impl Workspace {
             ctx.notify();
             ctx.focus(&self.command_search_view);
         } else {
-            log::error!("Command search keybinding triggered but no session is active!");
+            report_error!("Command search keybinding triggered but no session is active!");
         }
     }
 
@@ -17201,7 +17210,7 @@ impl Workspace {
 
             ctx.notify();
         } else {
-            log::error!("workspace::view::fill_input(): no active input view handle to fill");
+            report_error!("workspace::view::fill_input(): no active input view handle to fill");
         }
     }
 
@@ -17613,7 +17622,7 @@ impl Workspace {
 
         let Some(terminal_view_handle) = active_pane_group.as_ref(ctx).active_session_view(ctx)
         else {
-            log::error!("Could not get terminal view handle when attempting to open LSP logs.");
+            report_error!("Could not get terminal view handle when attempting to open LSP logs.");
             return;
         };
 
@@ -18148,7 +18157,7 @@ impl Workspace {
                             }
                             OperationSuccessType::FeatureNotAvailable => {
                                 if cloned_workflow.is_some() {
-                                    log::error!(
+                                    report_error!(
                                         "Getting feature not available message for workflows"
                                     );
                                 }
@@ -18186,7 +18195,10 @@ impl Workspace {
                             view.add_ephemeral_toast(new_toast, ctx);
                         }
                         OperationSuccessType::FeatureNotAvailable => {
-                            log::error!("Should not get deletion confirmation message when feature is not available. Operation type {:?}", result.operation);
+                            report_error!(
+                                "Should not get deletion confirmation message when feature is not available",
+                                extra: { "operation" => ?result.operation }
+                            );
                         }
                         OperationSuccessType::Denied(_) => {
                             let new_toast = DismissibleToast::error(message);
@@ -18998,7 +19010,7 @@ impl Workspace {
                     .as_ref(ctx)
                     .active_session_view(ctx)
                 else {
-                    log::error!("No active terminal view after adding tab for Codex session");
+                    report_error!("No active terminal view after adding tab for Codex session");
                     return;
                 };
 
@@ -19006,7 +19018,7 @@ impl Workspace {
                     .get_preferred_codex_model()
                     .map(|info| info.id.clone())
                 else {
-                    log::error!("No preferred codex model found");
+                    report_error!("No preferred codex model found");
                     return;
                 };
 
@@ -19144,7 +19156,7 @@ impl Workspace {
             .as_ref(ctx)
             .active_session_view(ctx)
         else {
-            log::error!("No active terminal view after adding tab for Linear issue work");
+            report_error!("No active terminal view after adding tab for Linear issue work");
             return;
         };
 
@@ -25685,15 +25697,23 @@ impl TypedActionView for Workspace {
                             }
                             Ok(Ok(output)) => {
                                 let stderr = String::from_utf8_lossy(&output.stderr);
-                                log::error!("sample command failed ({}): {stderr}", output.status);
+                                log::error!("sample command failed with stderr: {stderr}");
+                                report_error!(
+                                    "sample command failed",
+                                    extra: { "status" => %output.status }
+                                );
                                 "Failed to sample process (check logs)".to_string()
                             }
                             Ok(Err(io_err)) => {
-                                log::error!("Failed to run sample command: {io_err}");
+                                report_error!(
+                                    anyhow::Error::new(io_err).context("Failed to run sample command")
+                                );
                                 "Failed to sample process (check logs)".to_string()
                             }
                             Err(join_err) => {
-                                log::error!("Sample task panicked: {join_err}");
+                                report_error!(
+                                    anyhow::Error::new(join_err).context("Sample task panicked")
+                                );
                                 "Failed to sample process (check logs)".to_string()
                             }
                         };

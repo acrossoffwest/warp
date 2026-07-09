@@ -27,6 +27,8 @@ use crate::drive::{OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
 use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
+#[cfg(not(target_family = "wasm"))]
+use crate::report_error;
 use crate::root_view::{
     open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
     OpenLaunchConfigArg,
@@ -492,7 +494,7 @@ impl UriHost {
                     let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
                         .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
                     if let Err(e) = result {
-                        log::error!("Failed to handle MCP OAuth callback: {e:?}");
+                        report_error!(e.context("Failed to handle MCP OAuth callback"));
                     }
                 }
             }

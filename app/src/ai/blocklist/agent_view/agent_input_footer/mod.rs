@@ -65,6 +65,8 @@ use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::{self, ContextChipKind};
 use crate::features::FeatureFlag;
 use crate::network::NetworkStatus;
+#[cfg(any(not(target_family = "wasm"), feature = "voice_input"))]
+use crate::report_error;
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "voice_input")]
 use crate::server::server_api::TranscribeError;
@@ -1409,9 +1411,10 @@ impl AgentInputFooter {
                             CLIAgentSessionsModel::handle(ctx).update(ctx, |model, _| {
                                 model.record_plugin_auto_failure(agent, remote_host);
                             });
-                            log::error!(
-                                "Failed plugin operation for {agent:?}: {err}\n{log}",
-                                log = err.log,
+                            log::error!("Failed plugin operation log: {}", err.log);
+                            report_error!(
+                                anyhow::anyhow!("{err}").context("Failed plugin operation"),
+                                extra: { "agent" => ?agent }
                             );
                             let mut toast =
                                 DismissibleToast::error(format!("{error_label}: {err}"));
@@ -1839,14 +1842,19 @@ impl AgentInputFooter {
                         self.show_cli_microphone_access_toast(ctx);
                     }
                     Err(e) => {
-                        log::error!("Failed to start CLI voice input: {e:?}");
+                        report_error!(
+                            anyhow::Error::new(e).context("Failed to start CLI voice input")
+                        );
                     }
                 }
             }
             CLIVoiceInputState::Listening => {
                 voice_input::VoiceInput::handle(ctx).update(ctx, |voice_input, ctx| {
-                    if let Err(e) = voice_input.stop_listening(ctx) {
-                        log::error!("Failed to stop CLI voice input: {e:?}");
+                    if let Err(e) = anyhow::Context::context(
+                        voice_input.stop_listening(ctx),
+                        "Failed to stop CLI voice input",
+                    ) {
+                        report_error!(e);
                     }
                 });
             }
@@ -1922,7 +1930,9 @@ impl AgentInputFooter {
                     self.show_cli_voice_error_toast("Voice input limit reached", ctx);
                 }
                 _ => {
-                    log::error!("Failed to transcribe CLI voice input: {e:?}");
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to transcribe CLI voice input")
+                    );
                     self.show_cli_voice_error_toast("Failed to transcribe voice input", ctx);
                 }
             },

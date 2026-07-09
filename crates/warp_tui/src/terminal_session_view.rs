@@ -17,6 +17,7 @@ use warp::tui_export::{
     PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
     TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
+use warp_core::report_error;
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -558,7 +559,9 @@ impl TuiTerminalSessionView {
             }) {
                 Ok(conversation_id) => conversation_id,
                 Err(error) => {
-                    log::error!("Failed to create TUI conversation: {error:#}");
+                    report_error!(
+                        anyhow::Error::new(error).context("Failed to create TUI conversation")
+                    );
                     return;
                 }
             },
@@ -710,7 +713,7 @@ impl TerminalSurface for TuiTerminalSessionView {
     }
 
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
-        log::error!("TUI PTY spawn failed: {error:#}");
+        report_error!(error.context("TUI PTY spawn failed"));
         ctx.notify();
     }
 }
