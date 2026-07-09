@@ -1,3 +1,16 @@
+> [!IMPORTANT]
+> **This is a personal fork of [warpdotdev/warp](https://github.com/warpdotdev/warp)** with extra features on top of upstream. Everything below this section is the original upstream README.
+>
+> ### What this fork adds
+>
+> - **🧠 Session Memory** — an SQLite-backed registry of every terminal and CLI-agent session (Claude Code, Codex). A dedicated *Session Memory* board pane lists interrupted / closed / live chats with **Resume**, **Resume in split**, **Open transcript** and **Delete** actions, plus a read-only transcript viewer. After a crash or force-kill, interrupted agent chats from the previous run are **restored automatically** into the recreated tabs — including their `--dangerously-*` permission flags. Chats are deduplicated by native session id, and tabs you closed on purpose stay closed even when the window snapshot is stale.
+> - **▶️ CLI agent quick launch & resume** — a `+` menu entry per agent (Codex / Claude Code) that launches in the active directory, with a hover sub-sidecar for picking a working directory and resuming any previous session found in the agents' own session indexes. Opt-in settings to always launch agents with their dangerous-permissions flags.
+> - **🎛 Remote control** — an IPC server inside Warp plus a `warp-remote-control` CLI: ping the app, split panes, run commands in specific panes, and close panes from outside (built for driving Warp from automation and MCP servers).
+> - **⌘Q hold-to-quit** — Chrome-style: tap ⌘Q and nothing happens, hold it for 2 seconds (with a progress pill) to quit. The menu-click path keeps the classic confirm dialog. Toggleable in *Settings → Features*.
+> - **⌨️ Layout-independent shortcuts** — cmd-shortcuts now match by physical key, so in-app keybindings work on cyrillic and other non-latin keyboard layouts.
+> - **🧪 Dev-instance isolation** — `cargo run` builds honor `WARP_DATA_PROFILE` and keep their own state dir, SQLite, remote-control socket and log file, so a dev build never pollutes your daily Warp.
+> - **📦 CI builds** — a [GitHub Actions workflow](.github/workflows/build-oss.yml) that builds unsigned OSS bundles for macOS (arm64 + x86_64), Linux (AppImage + deb) and Windows on free runners; tag builds attach artifacts to a GitHub Release.
+
 <a href="https://www.warp.dev">
     <img width="1024" alt="Warp Agentic Development Environment product preview" src="https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4" />
 </a>
