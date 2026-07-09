@@ -82,7 +82,9 @@ jobs:
           shared-key: oss-linux
 
       - name: Install system build dependencies
-        run: sudo ./script/linux/install_build_deps
+        # No sudo: the script elevates itself for apt, and under sudo it can't
+        # see the runner's cargo or the GITHUB_ACTIONS env.
+        run: ./script/linux/install_build_deps
 
       - name: Build bundles (AppImage + deb)
         run: ./script/bundle --channel oss --packages appimage,deb
@@ -117,6 +119,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: oss-windows
+
+      - name: Install protoc
+        run: choco install protoc -y
 
       - name: Build bundle
         shell: pwsh
