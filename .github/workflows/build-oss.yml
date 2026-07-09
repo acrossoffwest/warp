@@ -1,0 +1,144 @@
+name: Build OSS bundles
+
+# Builds unsigned Warp OSS bundles for every desktop platform on free
+# GitHub-hosted runners. Trigger manually or by pushing a v* tag; tag builds
+# attach the artifacts to a GitHub Release.
+#
+# macOS bundles are ad-hoc signed (--nosign): after downloading, clear the
+# quarantine flag once: xattr -dr com.apple.quarantine WarpOss.app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: oss-${{ matrix.runner }}
+
+      - name: Bootstrap build dependencies
+        run: ./script/macos/bootstrap
+
+      - name: Build bundle
+        run: ./script/bundle --channel oss --nosign --nouniversal
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          APP_PATH="$(find target -type d -name 'WarpOss.app' | head -1)"
+          test -n "$APP_PATH"
+          # ditto preserves the bundle structure and symlinks, unlike zip -r
+          ditto -c -k --keepParent "$APP_PATH" "dist/WarpOss-macos-${{ matrix.arch }}.zip"
+          find target -maxdepth 4 -name '*.dmg' -exec cp {} dist/ \; || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warp-oss-macos-${{ matrix.arch }}
+          path: dist/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: oss-linux
+
+      - name: Install system build dependencies
+        run: sudo ./script/linux/install_build_deps
+
+      - name: Build bundles (AppImage + deb)
+        run: ./script/bundle --channel oss --packages appimage,deb
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find target -name '*.AppImage' -exec cp {} dist/ \;
+          find target -name '*.deb' -exec cp {} dist/ \; || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warp-oss-linux-x86_64
+          path: dist/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: oss-windows
+
+      - name: Build bundle
+        shell: pwsh
+        # The OSS channel ships without Sentry, so drop crash_reporting from
+        # the default feature set (the macOS/Linux scripts do this themselves).
+        run: ./script/windows/bundle.ps1 -CHANNEL oss -FEATURES 'release_bundle,gui'
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Get-ChildItem -Recurse target -Include 'WarpSetup*.exe','warp-oss*.exe' -ErrorAction SilentlyContinue |
+            Copy-Item -Destination dist -ErrorAction SilentlyContinue
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warp-oss-windows-x64
+          path: dist/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
