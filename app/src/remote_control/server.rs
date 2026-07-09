@@ -7,6 +7,18 @@ use warpui::r#async::executor::Background;
 
 use super::{RemoteControlJob, RemoteControlServiceImpl};
 
+/// Directory name holding the address file, scoped per data profile so a
+/// dev instance (`WARP_DATA_PROFILE`, debug builds only) and the installed
+/// release app don't overwrite each other's address.
+///
+/// Keep in sync with `socket_directory_name` in `warp_remote_control_cli`.
+fn socket_directory_name(data_profile: Option<&str>) -> String {
+    match data_profile {
+        Some(profile) => format!("dev.warp.Warp-{profile}"),
+        None => "dev.warp.Warp".to_string(),
+    }
+}
+
 /// Returns the absolute path where the IPC connection address is published.
 ///
 /// Clients (e.g. an MCP server) read this file to learn the socket path.
@@ -14,7 +26,25 @@ pub fn socket_address_path() -> Result<PathBuf> {
     let base = dirs::data_local_dir()
         .or_else(dirs::home_dir)
         .context("no data dir available")?;
-    Ok(base.join("dev.warp.Warp").join("remote_control.addr"))
+    let data_profile = crate::channel::ChannelState::data_profile();
+    Ok(base
+        .join(socket_directory_name(data_profile.as_deref()))
+        .join("remote_control.addr"))
+}
+
+#[cfg(test)]
+mod socket_path_tests {
+    use super::socket_directory_name;
+
+    #[test]
+    fn socket_directory_is_shared_default_without_profile() {
+        assert_eq!(socket_directory_name(None), "dev.warp.Warp");
+    }
+
+    #[test]
+    fn socket_directory_is_scoped_per_data_profile() {
+        assert_eq!(socket_directory_name(Some("dev")), "dev.warp.Warp-dev");
+    }
 }
 
 pub struct RemoteControlServerHandle {

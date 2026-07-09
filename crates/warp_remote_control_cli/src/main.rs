@@ -18,7 +18,10 @@ use protocol::{
 // ---------------------------------------------------------------------------
 
 #[derive(Parser, Debug)]
-#[command(name = "warp-remote-control", about = "External control for a running Warp instance")]
+#[command(
+    name = "warp-remote-control",
+    about = "External control for a running Warp instance"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -167,11 +170,44 @@ fn recv_message<M: for<'de> Deserialize<'de>>(stream: &mut LocalSocketStream) ->
 // Path helpers
 // ---------------------------------------------------------------------------
 
+/// Directory name holding the address file, scoped per data profile.
+///
+/// Set `WARP_DATA_PROFILE=<profile>` to target a dev Warp instance started
+/// with the same profile; without it the CLI talks to the default (release)
+/// instance. Keep in sync with `socket_directory_name` in
+/// `app/src/remote_control/server.rs`.
+fn socket_directory_name(data_profile: Option<&str>) -> String {
+    match data_profile {
+        Some(profile) => format!("dev.warp.Warp-{profile}"),
+        None => "dev.warp.Warp".to_string(),
+    }
+}
+
 fn socket_address_path() -> Result<PathBuf> {
     let base = dirs::data_local_dir()
         .or_else(dirs::home_dir)
         .context("no data dir available")?;
-    Ok(base.join("dev.warp.Warp").join("remote_control.addr"))
+    let data_profile = std::env::var("WARP_DATA_PROFILE")
+        .ok()
+        .filter(|profile| !profile.is_empty());
+    Ok(base
+        .join(socket_directory_name(data_profile.as_deref()))
+        .join("remote_control.addr"))
+}
+
+#[cfg(test)]
+mod socket_path_tests {
+    use super::socket_directory_name;
+
+    #[test]
+    fn socket_directory_is_shared_default_without_profile() {
+        assert_eq!(socket_directory_name(None), "dev.warp.Warp");
+    }
+
+    #[test]
+    fn socket_directory_is_scoped_per_data_profile() {
+        assert_eq!(socket_directory_name(Some("dev")), "dev.warp.Warp-dev");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +219,9 @@ fn main() {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("{e:#}");
-            if e.chain().any(|c| c.to_string().contains("Warp is not running")) {
+            if e.chain()
+                .any(|c| c.to_string().contains("Warp is not running"))
+            {
                 2
             } else if e.chain().any(|c| {
                 let s = c.to_string();
@@ -206,12 +244,8 @@ fn run() -> Result<()> {
 
     // Read the socket path written by the Warp server on startup.
     let addr_path = socket_address_path()?;
-    let socket_path = std::fs::read_to_string(&addr_path).with_context(|| {
-        format!(
-            "Warp is not running? Couldn't read {}",
-            addr_path.display()
-        )
-    })?;
+    let socket_path = std::fs::read_to_string(&addr_path)
+        .with_context(|| format!("Warp is not running? Couldn't read {}", addr_path.display()))?;
     let socket_path = socket_path.trim().to_owned();
 
     // Connect to the Warp IPC Unix domain socket.

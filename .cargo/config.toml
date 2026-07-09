@@ -8,6 +8,12 @@
 # `script/bundle`.
 MACOSX_DEPLOYMENT_TARGET = "10.14"
 
+# Isolate `cargo run` instances from the installed release app: debug builds
+# honor WARP_DATA_PROFILE and suffix their data domain (state dir, sqlite,
+# remote-control socket, log file) with the profile name. Release builds
+# ignore this variable entirely.
+WARP_DATA_PROFILE = "dev"
+
 [build]
 rustflags = ["-C", "symbol-mangling-version=v0", "-C", "link-args=-Wl,-headerpad_max_install_names"]
 

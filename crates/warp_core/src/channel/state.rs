@@ -131,7 +131,9 @@ impl ChannelState {
     /// supported in release builds.
     pub fn data_profile() -> Option<String> {
         if cfg!(debug_assertions) {
-            std::env::var("WARP_DATA_PROFILE").ok()
+            std::env::var("WARP_DATA_PROFILE")
+                .ok()
+                .filter(|profile| !profile.is_empty())
         } else {
             None
         }
@@ -168,7 +170,11 @@ impl ChannelState {
     }
 
     pub fn logfile_name() -> Cow<'static, str> {
-        CHANNEL_STATE.lock().config.logfile_name.clone()
+        let base = CHANNEL_STATE.lock().config.logfile_name.clone();
+        match Self::data_profile() {
+            Some(profile) => Cow::Owned(logfile_name_with_profile(&base, &profile)),
+            None => base,
+        }
     }
 
     pub fn telemetry_file_name() -> Cow<'static, str> {
@@ -408,6 +414,30 @@ fn derive_http_origin_from_ws_url(ws_url: &str) -> Option<String> {
         origin.push_str(&format!(":{port}"));
     }
     Some(origin)
+}
+
+/// Inserts the data-profile suffix before the extension, so two instances
+/// running with different profiles write to different log files
+/// (e.g. `warp-oss.log` -> `warp-oss-dev.log`).
+fn logfile_name_with_profile(base: &str, profile: &str) -> String {
+    match base.rsplit_once('.') {
+        Some((stem, extension)) => format!("{stem}-{profile}.{extension}"),
+        None => format!("{base}-{profile}"),
+    }
+}
+
+#[cfg(test)]
+mod logfile_name_tests {
+    use super::logfile_name_with_profile;
+
+    #[test]
+    fn profile_suffix_is_inserted_before_extension() {
+        assert_eq!(
+            logfile_name_with_profile("warp-oss.log", "dev"),
+            "warp-oss-dev.log"
+        );
+        assert_eq!(logfile_name_with_profile("warp", "dev"), "warp-dev");
+    }
 }
 
 #[cfg(all(test, not(feature = "test-util")))]
