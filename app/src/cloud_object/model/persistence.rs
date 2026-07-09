@@ -1,7 +1,18 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::SyncSender;
+
+use chrono::{DateTime, Duration, Utc};
+use itertools::Itertools;
+use rand::Rng;
+use warp_core::features::FeatureFlag;
+use warp_graphql::scalars::time::ServerTimestamp;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
+use super::generic_string_model::GenericStringObjectId;
 use crate::ai::execution_profiles::CloudAIExecutionProfile;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{
-    CloudModelType, CloudObjectLocation, CloudObjectPermissions, GenericCloudObject,
+    CloudModelType, CloudObject, CloudObjectLocation, CloudObjectPermissions, GenericCloudObject,
     GenericServerObject, GenericStringObjectFormat, JsonObjectType, ObjectIdType, ObjectType,
     ObjectsToUpdate, Owner, Revision, RevisionAndLastEditor, ServerCloudObject, ServerCreationInfo,
     ServerFolder, ServerMetadata, ServerNotebook, ServerPermissions, ServerWorkflow, Space,
@@ -14,26 +25,13 @@ use crate::drive::{
 use crate::env_vars::{CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVarCollection};
 use crate::notebooks::CloudNotebook;
 use crate::persistence::ModelEvent;
+use crate::report_error;
 use crate::server::ids::{ClientId, HashableId, ObjectUid, ServerId, SyncId, ToServerId};
 use crate::settings::cloud_preferences::{CloudPreference, CloudPreferenceModel};
 use crate::workflows::workflow::Workflow;
 use crate::workflows::workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum};
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-
-use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::SyncSender;
-use warp_graphql::scalars::time::ServerTimestamp;
-
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
-
-use crate::cloud_object::CloudObject;
-use chrono::{DateTime, Duration, Utc};
-use rand::Rng;
-use warp_core::features::FeatureFlag;
-
-use super::generic_string_model::GenericStringObjectId;
 
 // Equivalent to 24 hours
 const MIN_MINUTES_UNTIL_NEXT_FORCE_REFRESH: i64 = 1440;
@@ -547,7 +545,7 @@ impl CloudModel {
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(folder) = self.get_folder(&server_folder.id) {
-            server_folder.model.is_open = folder.model.is_open;
+            server_folder.model.is_open = folder.model().is_open;
         }
 
         self.upsert_from_server_object(server_folder, ctx);
@@ -789,7 +787,7 @@ impl CloudModel {
                     id: object.hashed_sqlite_id(),
                     metadata: object.metadata().clone(),
                 }) {
-                    log::error!("Error saving to cache: {e:?}");
+                    report_error!(anyhow::Error::new(e).context("Error saving to cache"));
                 }
             }
             ctx.notify();
@@ -893,19 +891,19 @@ impl CloudModel {
             let is_open = match open_state {
                 FolderOpenState::Open => true,
                 FolderOpenState::Closed => false,
-                FolderOpenState::Reversed => !folder.model.is_open,
+                FolderOpenState::Reversed => !folder.model().is_open,
             };
 
             folder.set_model(CloudFolderModel {
                 is_open,
-                is_warp_pack: folder.model.is_warp_pack,
-                name: folder.model.name.clone(),
+                is_warp_pack: folder.model().is_warp_pack,
+                name: folder.model().name.clone(),
             });
 
             let folder_clone = folder.clone();
             if let Some(model_event_sender) = &self.model_event_sender {
                 if let Err(e) = model_event_sender.send(folder_clone.upsert_event()) {
-                    log::error!("Error persisting folder: {e:?}");
+                    report_error!(anyhow::Error::new(e).context("Error persisting folder"));
                 }
             }
 
@@ -1061,7 +1059,9 @@ impl CloudModel {
                 {
                     self.force_expand_object_and_ancestors(id, ctx)
                 } else {
-                    log::error!("Attempted to force expand an unsupported GenericStringObject type")
+                    report_error!(
+                        "Attempted to force expand an unsupported GenericStringObject type"
+                    )
                 }
             }
         }
@@ -1783,9 +1783,12 @@ impl CloudModel {
 
         if let Some(model_event_sender) = &self.model_event_sender {
             if let Err(e) = model_event_sender.send(M::bulk_upsert_event(
-                objects_without_pending_changes.as_slice(),
+                objects_without_pending_changes
+                    .iter()
+                    .map(|object| object.upsert_params(object.object_type()))
+                    .collect(),
             )) {
-                log::error!("Error saving team objects to cache: {e:?}");
+                report_error!(anyhow::Error::new(e).context("Error saving team objects to cache"));
             }
         }
     }

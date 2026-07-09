@@ -1,18 +1,19 @@
 //! Module containing logic to determine to open a file in a text editor, if it is installed.
 //! TODO(PLAT-749): Add support for more editors.
 
-use command::r#async::Command;
-use enum_iterator::{all, cardinality};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+use command::r#async::Command;
+use enum_iterator::{all, cardinality};
 use warp_util::path::LineAndColumnArg;
 use warpui::AppContext;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
-use winreg::RegKey;
-use winreg::HKEY;
+use winreg::{RegKey, HKEY};
 
 use super::Editor;
+use crate::report_error;
 
 static INSTALLED_EDITOR_METADATA: OnceLock<HashMap<Editor, EditorMetadata>> = OnceLock::new();
 
@@ -218,7 +219,10 @@ pub fn open_file_path_with_line_and_col(
         if let Some(editor) = with_editor {
             if let Some(mut command) = editor.command(line_column_number, full_path) {
                 if let Err(err) = command.spawn() {
-                    log::error!("Error launching {editor:?}: {err:#}");
+                    report_error!(
+                        anyhow::Error::new(err).context("Error launching editor"),
+                        extra: { "editor" => ?editor }
+                    );
                 }
                 return;
             }

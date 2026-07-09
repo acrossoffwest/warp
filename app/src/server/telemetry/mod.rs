@@ -6,30 +6,31 @@ mod macros;
 pub mod rudder_message;
 pub mod secret_redaction;
 
+use std::fs::File;
+#[cfg(not(target_family = "wasm"))]
+use std::fs::OpenOptions;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
 use chrono::Utc;
 pub use collector::*;
 pub use context::telemetry_context;
 pub use events::*;
+use futures::FutureExt;
+use rudder_message::{
+    Batch as RudderBatch, BatchMessage as RudderBatchMessageWithMetadata,
+    BatchMessageItem as RudderBatchMessage, Message as RudderMessage,
+};
+use warp_core::channel::RudderStackDestination;
+use warpui::telemetry::Event;
 
 use crate::auth::UserUid;
 use crate::features::FeatureFlag;
 use crate::server::telemetry::context::AttachContext;
 use crate::server::telemetry_ext::TelemetryExt;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::ChannelState;
-use anyhow::Result;
-use futures::FutureExt;
-use rudder_message::{
-    Batch as RudderBatch, BatchMessage as RudderBatchMessageWithMetadata,
-    BatchMessageItem as RudderBatchMessage, Message as RudderMessage,
-};
-use std::fs::File;
-#[cfg(not(target_family = "wasm"))]
-use std::fs::OpenOptions;
-use std::future::Future;
-use std::path::{Path, PathBuf};
-use warp_core::channel::RudderStackDestination;
-use warpui::telemetry::Event;
+use crate::{report_error, ChannelState};
 
 /// Filename for file where telemetry events are written on app quit.
 const RUDDER_TELEMETRY_EVENTS_FILE_NAME: &str = "rudder_telemetry_events.json";
@@ -171,7 +172,7 @@ impl TelemetryApi {
 
         let events = warpui::telemetry::flush_events();
         if events.len() > max_event_count {
-            log::error!("More telemetry events in queue than the limit to persist")
+            report_error!("More telemetry events in queue than the limit to persist")
         }
 
         self.persist_events_at_path(&file, max_event_count, events)?;

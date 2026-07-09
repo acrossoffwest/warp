@@ -1,37 +1,79 @@
-use std::{path::PathBuf, sync::Arc};
+use std::ffi::OsStr;
+use std::path::PathBuf;
+use std::sync::Arc;
 
+use ai::workspace::WorkspaceMetadata;
+use chrono::Utc;
+use cloud_object_persistence::to_cloud_object_permissions;
+use diesel::connection::SimpleConnection;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
 
-use crate::{
-    app_state::{
-        AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot,
-        PaneNodeSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
-    },
-    cloud_object::{CloudObjectPermissions, Owner},
-    code::editor_management::CodeSource,
-    notebooks::{CloudNotebook, CloudNotebookModel},
-    persistence::{model::ObjectPermissions, BlockCompleted, ModelEvent, PersistenceScope},
-    persistence::{
-        AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
-        SessionMemoryStatus,
-    },
-    server::ids::ClientId,
-    tab::SelectedTabColor,
-    terminal::model::block::SerializedBlock,
-    terminal::ShellLaunchData,
-};
-
 use super::{
-    app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
-    encode_path, handle_model_event, mark_session_memory_app_run_clean, read_sqlite_data,
-    save_app_state, setup_database, start_session_memory_app_run,
+    app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
+    decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
+    handle_model_event, mark_session_memory_app_run_clean, read_sqlite_data, save_app_state,
+    save_codebase_index_metadata, setup_database, start_session_memory_app_run, start_writer,
 };
+use crate::persistence::{
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    SessionMemoryStatus,
+};
+use crate::app_state::{
+    AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
+    TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+};
+use crate::cloud_object::{CloudObjectPermissions, Owner};
+use crate::code::editor_management::CodeSource;
+use crate::notebooks::{CloudNotebook, CloudNotebookModel};
+use crate::persistence::model::ObjectPermissions;
+use crate::persistence::{BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope};
+use crate::server::ids::ClientId;
+use crate::tab::SelectedTabColor;
+use crate::terminal::model::block::SerializedBlock;
+use crate::terminal::ShellLaunchData;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::tab_group::TabGroupId;
 
 #[test]
 fn app_scope_database_path_matches_app_database_path() {
     assert_eq!(
         database_file_path_for_scope(&PersistenceScope::App),
+        app_database_file_path()
+    );
+}
+
+#[test]
+fn tui_scope_database_path_is_tui_subdirectory_of_app_database_dir() {
+    let tui_path = database_file_path_for_scope(&PersistenceScope::Tui);
+    let app_path = database_file_path_for_scope(&PersistenceScope::App);
+
+    assert_ne!(tui_path, app_path);
+    assert_eq!(
+        tui_path,
+        warp_core::paths::tui_state_dir().join("warp.sqlite")
+    );
+
+    // The TUI database lives in a `tui` subdirectory of the same base
+    // directory that holds the GUI database, so the two front-ends never
+    // share (or migrate) each other's database.
+    let tui_dir = tui_path
+        .parent()
+        .expect("TUI database path should have a parent");
+    assert_eq!(tui_dir.file_name(), Some(OsStr::new("tui")));
+    assert_eq!(tui_dir.parent(), app_path.parent());
+}
+
+#[test]
+fn database_path_for_current_scope_defaults_to_app_scope() {
+    // Unit tests never call `persistence::initialize`, so the process-wide
+    // scope defaults to `App` and ad-hoc read-only connections resolve to
+    // the GUI database. (nextest runs each test in its own process, so no
+    // other test can have set the scope.)
+    assert_eq!(
+        database_file_path_for_current_scope(),
         app_database_file_path()
     );
 }
@@ -62,6 +104,138 @@ fn remote_server_daemon_scope_database_path_handles_empty_identity_key() {
         path,
         PathBuf::from(shellexpand::tilde(&expected_data_dir).into_owned()).join("warp.sqlite")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_server_daemon_database_permissions_are_owner_only() {
+    use std::fs::Permissions;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let daemon_dir = tempdir.path().join("daemon");
+    let database_path = daemon_dir.join("warp.sqlite");
+
+    std::fs::create_dir_all(&daemon_dir).expect("daemon dir should be created");
+    std::fs::set_permissions(&daemon_dir, Permissions::from_mode(0o755))
+        .expect("daemon dir permissions should be set");
+    std::fs::write(&database_path, b"").expect("database file should be created");
+    std::fs::set_permissions(&database_path, Permissions::from_mode(0o644))
+        .expect("database file permissions should be set");
+
+    super::ensure_owner_only_dir(&daemon_dir).expect("daemon dir should be owner-only");
+    super::ensure_owner_only_file(&database_path).expect("database file should be owner-only");
+
+    assert_eq!(daemon_dir.metadata().unwrap().mode() & 0o777, 0o700);
+    assert_eq!(database_path.metadata().unwrap().mode() & 0o777, 0o600);
+}
+
+fn test_codebase_metadata(path: &str) -> WorkspaceMetadata {
+    WorkspaceMetadata {
+        path: PathBuf::from(path),
+        navigated_ts: Some(Utc::now()),
+        modified_ts: None,
+        queried_ts: None,
+    }
+}
+
+#[test]
+fn sqlite_read_restores_app_state_and_codebase_metadata() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let metadata = test_codebase_metadata("/tmp/remote-repo");
+    save_codebase_index_metadata(&mut conn, metadata.clone())
+        .expect("codebase index metadata should save");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("persisted data should load");
+    let restored_app_state = restored
+        .app_state
+        .expect("app state should be present for the full scope");
+    assert_eq!(restored_app_state.windows.len(), 1);
+    assert_eq!(restored.codebase_indices.len(), 1);
+    assert_eq!(restored.codebase_indices[0].path, metadata.path);
+}
+
+/// Mirrors `init_db(&PersistenceScope::Tui)` in an isolated tempdir: the TUI
+/// database lives in a `tui/` subdirectory, runs the same migrations, and
+/// round-trips a write+read using the TUI's `PersistedDataScope`.
+#[test]
+fn tui_database_in_tui_subdirectory_round_trips_data() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("tui").join("warp.sqlite");
+    std::fs::create_dir_all(
+        database_path
+            .parent()
+            .expect("database path should have a parent"),
+    )
+    .expect("tui subdirectory should be created");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let metadata = test_codebase_metadata("/tmp/tui-repo");
+    save_codebase_index_metadata(&mut conn, metadata.clone())
+        .expect("codebase index metadata should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::TuiFrontend)
+        .expect("persisted data should load");
+    // The TUI data scope skips GUI session restoration and history...
+    assert!(restored.app_state.is_none());
+    assert!(restored.command_history.is_empty());
+    // ...but still round-trips shared data like codebase index metadata.
+    assert_eq!(restored.codebase_indices.len(), 1);
+    assert_eq!(restored.codebase_indices[0].path, metadata.path);
+}
+
+#[test]
+fn sqlite_writer_reuses_codebase_index_metadata_events() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+
+    let writer = start_writer(conn, database_path.clone(), None).expect("writer should start");
+    let metadata = test_codebase_metadata("/tmp/writer-repo");
+    writer
+        .sender
+        .send(ModelEvent::UpsertCodebaseIndexMetadata {
+            index_metadata: Box::new(metadata.clone()),
+        })
+        .expect("upsert event should send");
+    writer
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("terminate event should send");
+    writer.handle.join().expect("writer should terminate");
+
+    let mut conn = setup_database(&database_path).expect("database should reopen");
+    let restored = get_all_codebase_index_metadata(&mut conn).expect("metadata should load");
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].path, metadata.path);
+
+    let writer = start_writer(conn, database_path.clone(), None).expect("writer should restart");
+    writer
+        .sender
+        .send(ModelEvent::DeleteCodebaseIndexMetadata {
+            repo_path: metadata.path,
+        })
+        .expect("delete event should send");
+    writer
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("terminate event should send");
+    writer.handle.join().expect("writer should terminate");
+
+    let mut conn = setup_database(&database_path).expect("database should reopen");
+    let restored = get_all_codebase_index_metadata(&mut conn).expect("metadata should load");
+    assert!(restored.is_empty());
 }
 #[test]
 fn test_deduplicate_snapshots() {
@@ -180,6 +354,8 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             selected_color: SelectedTabColor::default(),
             left_panel: None,
             right_panel: None,
+            group_id: None,
+            pinned: false,
         }],
         active_tab_index: 0,
         bounds: None,
@@ -194,6 +370,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
         left_panel_width: None,
         right_panel_width: None,
         agent_management_filters: None,
+        tab_groups: vec![],
     }
 }
 
@@ -215,9 +392,10 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.active_window_index, Some(1));
     assert_eq!(
@@ -263,6 +441,8 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 selected_color: SelectedTabColor::default(),
                 left_panel: None,
                 right_panel: None,
+                group_id: None,
+                pinned: false,
             }],
             active_tab_index: 0,
             bounds: None,
@@ -277,6 +457,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
+            tab_groups: vec![],
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -285,9 +466,10 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     let PaneNodeSnapshot::Leaf(LeafSnapshot {
         custom_vertical_tabs_title,
@@ -327,7 +509,9 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                         ],
                         active_tab_index: 1,
                         source: Some(CodeSource::FileTree {
-                            path: PathBuf::from("/tmp/main.rs"),
+                            location: crate::code::buffer_location::LocalOrRemotePath::Local(
+                                PathBuf::from("/tmp/main.rs"),
+                            ),
                         }),
                     }),
                 }),
@@ -335,6 +519,8 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 selected_color: SelectedTabColor::default(),
                 left_panel: None,
                 right_panel: None,
+                group_id: None,
+                pinned: false,
             }],
             active_tab_index: 0,
             bounds: None,
@@ -349,6 +535,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
             left_panel_width: None,
             right_panel_width: None,
             agent_management_filters: None,
+            tab_groups: vec![],
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
@@ -357,9 +544,10 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
 
     save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .app_state;
+        .app_state
+        .expect("app state should be present for the full scope");
 
     assert_eq!(restored.windows.len(), 1);
     let restored_tab = &restored.windows[0].tabs[0];
@@ -384,185 +572,291 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
     assert!(matches!(source, Some(CodeSource::FileTree { .. })));
 }
 
+/// Verifies that a tab group and its membership round-trip through save/restore.
 #[test]
-fn session_memory_records_round_trip_and_lifecycle_events() {
+fn test_sqlite_round_trips_tab_groups() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
-    let record = SessionMemoryRecord {
-        id: "codex-abc123".to_string(),
-        source: SessionMemorySource::Codex,
-        kind: SessionMemoryKind::AgentChat,
-        status: SessionMemoryStatus::Blocked,
-        title: "Codex resume abc123".to_string(),
-        summary: Some("waiting for approval".to_string()),
-        cwd: Some(PathBuf::from("/tmp/warp-session-memory-test")),
-        project: Some("warp".to_string()),
-        native_session_id: Some("abc123".to_string()),
-        transcript_path: Some(PathBuf::from("/tmp/warp-session-memory-test/codex.jsonl")),
-        terminal_pane_uuid: Some(vec![1, 2, 3, 4]),
-        app_window_fingerprint: Some("window-a".to_string()),
-        app_tab_fingerprint: Some("tab-b".to_string()),
-        last_command: Some("cargo check -p warp".to_string()),
-        last_exit_code: Some(0),
-        launch_argv: Some(vec![
-            "codex".to_string(),
-            "--resume".to_string(),
-            "abc123".to_string(),
-            "--dangerously-bypass-approvals-and-sandbox".to_string(),
-        ]),
-        permission_mode: AgentPermissionMode::Dangerous,
-        last_seen_at: 1234,
-        started_at: Some(1200),
-        completed_at: None,
-        closed_intentionally_at: None,
-        app_run_id: Some("previous-run".to_string()),
-        recovery_offered_run_id: None,
-        restore_payload: Some(serde_json::json!({
-            "cwd": "/tmp/warp-session-memory-test",
-            "resume_id": "abc123"
-        })),
+    let group_id = TabGroupId::new();
+    let tab_in_group = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![1],
+                cwd: Some("/tmp/grouped".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(group_id),
+        pinned: false,
+    };
+    let tab_outside_group = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![2],
+                cwd: Some("/tmp/ungrouped".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: None,
+        pinned: false,
     };
 
-    handle_model_event(
-        ModelEvent::UpsertSessionMemoryRecord {
-            record: record.clone(),
-        },
-        &mut conn,
-    )
-    .expect("session memory record should upsert");
-
-    let restored = read_sqlite_data(&mut conn, None).expect("app state should load");
-    assert_eq!(restored.session_memory_records, vec![record.clone()]);
-
-    handle_model_event(
-        ModelEvent::MarkSessionMemoryRecordClosed {
-            id: record.id.clone(),
-            closed_intentionally_at: 1300,
-        },
-        &mut conn,
-    )
-    .expect("session memory record should mark closed");
-
-    let closed = read_sqlite_data(&mut conn, None)
-        .expect("app state should load")
-        .session_memory_records
-        .pop()
-        .expect("record should remain after mark closed");
-    assert_eq!(closed.closed_intentionally_at, Some(1300));
-    assert_eq!(closed.status, SessionMemoryStatus::UserClosed);
-    assert_eq!(
-        closed.cwd,
-        Some(PathBuf::from("/tmp/warp-session-memory-test"))
-    );
-    assert_eq!(closed.launch_argv, record.launch_argv);
-    assert_eq!(closed.permission_mode, AgentPermissionMode::Dangerous);
-
-    handle_model_event(
-        ModelEvent::DeleteSessionMemoryRecord { id: record.id },
-        &mut conn,
-    )
-    .expect("session memory record should delete");
-
-    let restored = read_sqlite_data(&mut conn, None).expect("app state should load");
-    assert!(restored.session_memory_records.is_empty());
-}
-
-#[test]
-fn session_memory_record_upsert_clears_previously_set_optional_fields() {
-    let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let database_path = tempdir.path().join("warp.sqlite");
-    let mut conn = setup_database(&database_path).expect("database should initialize");
-
-    let mut record = SessionMemoryRecord {
-        id: "codex-abc123".to_string(),
-        source: SessionMemorySource::Codex,
-        kind: SessionMemoryKind::AgentChat,
-        status: SessionMemoryStatus::Live,
-        title: "Codex resume abc123".to_string(),
-        summary: None,
-        cwd: Some(PathBuf::from("/tmp/warp-session-memory-test")),
-        project: None,
-        native_session_id: Some("abc123".to_string()),
-        transcript_path: None,
-        terminal_pane_uuid: Some(vec![1, 2, 3, 4]),
-        app_window_fingerprint: None,
-        app_tab_fingerprint: None,
-        last_command: None,
-        last_exit_code: None,
-        launch_argv: None,
-        permission_mode: AgentPermissionMode::Dangerous,
-        last_seen_at: 1234,
-        started_at: None,
-        completed_at: None,
-        closed_intentionally_at: Some(1300),
-        app_run_id: Some("previous-run".to_string()),
-        recovery_offered_run_id: Some("previous-run".to_string()),
-        restore_payload: None,
+    let app_state = AppState {
+        windows: vec![WindowSnapshot {
+            tabs: vec![tab_in_group, tab_outside_group],
+            active_tab_index: 0,
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            tab_groups: vec![TabGroupSnapshot {
+                id: group_id,
+                name: Some("Backend".to_string()),
+                color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                collapsed: true,
+                pinned: false,
+            }],
+        }],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
     };
 
-    handle_model_event(
-        ModelEvent::UpsertSessionMemoryRecord {
-            record: record.clone(),
-        },
-        &mut conn,
-    )
-    .expect("session memory record should upsert");
+    save_app_state(&mut conn, &app_state).expect("app state should save");
 
-    // The pane is alive again: a fresh upsert must clear the stale
-    // closed/offered markers, otherwise the record is misclassified as
-    // user-closed on the next startup and never auto-restored.
-    record.closed_intentionally_at = None;
-    record.recovery_offered_run_id = None;
-
-    handle_model_event(
-        ModelEvent::UpsertSessionMemoryRecord {
-            record: record.clone(),
-        },
-        &mut conn,
-    )
-    .expect("session memory record should upsert again");
-
-    let restored = read_sqlite_data(&mut conn, None)
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
         .expect("app state should load")
-        .session_memory_records
-        .pop()
-        .expect("record should exist");
-    assert_eq!(restored.closed_intentionally_at, None);
-    assert_eq!(restored.recovery_offered_run_id, None);
-    assert_eq!(restored.status, SessionMemoryStatus::Live);
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 1);
+    let restored_window = &restored.windows[0];
+    assert_eq!(restored_window.tab_groups.len(), 1);
+    let restored_group = &restored_window.tab_groups[0];
+    assert_eq!(restored_group.name.as_deref(), Some("Backend"));
+    assert_eq!(
+        restored_group.color,
+        SelectedTabColor::Color(AnsiColorIdentifier::Blue)
+    );
+    assert!(restored_group.collapsed);
+
+    // The in-memory `TabGroupId` is minted fresh on restore, so we check that
+    // the grouped tab points at the restored group, and the ungrouped tab
+    // remains ungrouped.
+    assert_eq!(restored_window.tabs.len(), 2);
+    assert_eq!(restored_window.tabs[0].group_id, Some(restored_group.id));
+    assert_eq!(restored_window.tabs[1].group_id, None);
 }
 
+/// Verifies that the `pinned` flag on tabs and tab groups round-trips through
+/// save/restore so the user's pinned layout survives an app restart.
 #[test]
-fn session_memory_app_run_tracks_recoverable_previous_run() {
+fn test_sqlite_round_trips_pinned_state() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");
 
-    let first_run =
-        start_session_memory_app_run(&mut conn).expect("first session memory app run should start");
-    mark_session_memory_app_run_clean(&mut conn, &first_run.current_run_id, 100)
-        .expect("first run should be marked clean");
+    let pinned_group_id = TabGroupId::new();
+    let unpinned_group_id = TabGroupId::new();
 
-    let second_run = start_session_memory_app_run(&mut conn)
-        .expect("second session memory app run should start");
-    assert_eq!(
-        second_run.previous_run_id.as_deref(),
-        Some(first_run.current_run_id.as_str())
-    );
-    assert_eq!(second_run.recoverable_run_id, None);
+    let pinned_tab = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![10],
+                cwd: Some("/tmp/pinned".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: None,
+        pinned: true,
+    };
+    let unpinned_tab = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![11],
+                cwd: Some("/tmp/unpinned".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(unpinned_group_id),
+        pinned: false,
+    };
+    let tab_in_pinned_group = TabSnapshot {
+        custom_title: None,
+        root: PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: vec![12],
+                cwd: Some("/tmp/pinned-group".to_string()),
+                shell_launch_data: Some(ShellLaunchData::Executable {
+                    executable_path: PathBuf::from("/bin/zsh"),
+                    shell_type: crate::terminal::shell::ShellType::Zsh,
+                }),
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        }),
+        default_directory_color: None,
+        selected_color: SelectedTabColor::default(),
+        left_panel: None,
+        right_panel: None,
+        group_id: Some(pinned_group_id),
+        pinned: false,
+    };
 
-    let third_run =
-        start_session_memory_app_run(&mut conn).expect("third session memory app run should start");
-    assert_eq!(
-        third_run.previous_run_id.as_deref(),
-        Some(second_run.current_run_id.as_str())
-    );
-    assert_eq!(
-        third_run.recoverable_run_id.as_deref(),
-        Some(second_run.current_run_id.as_str())
-    );
+    let app_state = AppState {
+        windows: vec![WindowSnapshot {
+            tabs: vec![pinned_tab, tab_in_pinned_group, unpinned_tab],
+            active_tab_index: 0,
+            bounds: None,
+            fullscreen_state: Default::default(),
+            quake_mode: false,
+            universal_search_width: None,
+            warp_ai_width: None,
+            voltron_width: None,
+            warp_drive_index_width: None,
+            left_panel_open: false,
+            vertical_tabs_panel_open: false,
+            left_panel_width: None,
+            right_panel_width: None,
+            agent_management_filters: None,
+            tab_groups: vec![
+                TabGroupSnapshot {
+                    id: pinned_group_id,
+                    name: Some("Pinned".to_string()),
+                    color: SelectedTabColor::default(),
+                    collapsed: false,
+                    pinned: true,
+                },
+                TabGroupSnapshot {
+                    id: unpinned_group_id,
+                    name: Some("Loose".to_string()),
+                    color: SelectedTabColor::default(),
+                    collapsed: false,
+                    pinned: false,
+                },
+            ],
+        }],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 1);
+    let restored_window = &restored.windows[0];
+
+    // Tabs come back in insertion order; pinned flag should match what we saved.
+    assert_eq!(restored_window.tabs.len(), 3);
+    assert!(restored_window.tabs[0].pinned);
+    assert!(!restored_window.tabs[1].pinned);
+    assert!(!restored_window.tabs[2].pinned);
+
+    // Both groups round-trip with their pinned state preserved. Group ids are
+    // minted fresh on restore, so we look them up by name.
+    assert_eq!(restored_window.tab_groups.len(), 2);
+    let restored_pinned_group = restored_window
+        .tab_groups
+        .iter()
+        .find(|group| group.name.as_deref() == Some("Pinned"))
+        .expect("pinned group should restore");
+    let restored_loose_group = restored_window
+        .tab_groups
+        .iter()
+        .find(|group| group.name.as_deref() == Some("Loose"))
+        .expect("unpinned group should restore");
+    assert!(restored_pinned_group.pinned);
+    assert!(!restored_loose_group.pinned);
 }
 
 fn assert_encode_then_decode_preserves_original_path(original_path: PathBuf) {
@@ -624,7 +918,7 @@ fn test_deserialize_corrupted_guests() {
     };
 
     // The overall permissions should successfully convert, minus the object guests.
-    let cloud_permissions = super::to_cloud_object_permissions(&db_permissions, None);
+    let cloud_permissions = to_cloud_object_permissions(&db_permissions, None);
     assert_eq!(
         cloud_permissions,
         Some(CloudObjectPermissions {
@@ -635,5 +929,273 @@ fn test_deserialize_corrupted_guests() {
             anyone_with_link: None,
             guests: vec![],
         })
+    );
+}
+
+// Regression: GH#10083. The macOS green-tile button could leave a 1px-wide
+// window bound in `AppContext::window_bounds`, which previously round-tripped
+// through SQLite and restored as an unusable 1px sliver. Bounds below the
+// platform minimum window size must be dropped on save.
+#[test]
+fn test_sqlite_drops_too_small_bounds_on_save() {
+    use diesel::prelude::*;
+
+    use crate::persistence::schema::windows;
+
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let mut snapshot = test_terminal_window_snapshot(false);
+    snapshot.bounds = Some(RectF::new(
+        Vector2F::new(0.0, -1410.0),
+        Vector2F::new(1.0, 1410.0),
+    ));
+
+    let app_state = AppState {
+        windows: vec![snapshot],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    // Query the row directly so the assertion isolates the save guard and is
+    // not masked by the read-side guard in `read_sqlite_data`.
+    let row: (Option<f32>, Option<f32>, Option<f32>, Option<f32>) = windows::dsl::windows
+        .select((
+            windows::columns::window_width,
+            windows::columns::window_height,
+            windows::columns::origin_x,
+            windows::columns::origin_y,
+        ))
+        .first(&mut conn)
+        .expect("a windows row should have been inserted");
+
+    assert_eq!(
+        row,
+        (None, None, None, None),
+        "save-path guard must persist NULL bound columns for sub-minimum geometry"
+    );
+}
+
+// Regression: GH#10083. Users whose warp.sqlite already contains a 1px row
+// (because they hit the bug on an earlier build) must still recover to default
+// geometry on next launch rather than restoring the sliver.
+#[test]
+fn test_sqlite_drops_too_small_bounds_on_read() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    // Save with no bounds so a row exists, then corrupt it directly to bypass
+    // the save-path guard and simulate a pre-existing bad row.
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    conn.batch_execute(
+        "UPDATE windows \
+         SET window_width = 1.0, window_height = 1410.0, \
+             origin_x = 0.0, origin_y = -1410.0",
+    )
+    .expect("corrupting update should succeed");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 1);
+    assert!(
+        restored.windows[0].bounds.is_none(),
+        "tiny persisted bounds must be discarded on read so users recover from a corrupt DB"
+    );
+}
+
+// --- session memory tests (fork) ---
+#[test]
+fn session_memory_records_round_trip_and_lifecycle_events() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let record = SessionMemoryRecord {
+        id: "codex-abc123".to_string(),
+        source: SessionMemorySource::Codex,
+        kind: SessionMemoryKind::AgentChat,
+        status: SessionMemoryStatus::Blocked,
+        title: "Codex resume abc123".to_string(),
+        summary: Some("waiting for approval".to_string()),
+        cwd: Some(PathBuf::from("/tmp/warp-session-memory-test")),
+        project: Some("warp".to_string()),
+        native_session_id: Some("abc123".to_string()),
+        transcript_path: Some(PathBuf::from("/tmp/warp-session-memory-test/codex.jsonl")),
+        terminal_pane_uuid: Some(vec![1, 2, 3, 4]),
+        app_window_fingerprint: Some("window-a".to_string()),
+        app_tab_fingerprint: Some("tab-b".to_string()),
+        last_command: Some("cargo check -p warp".to_string()),
+        last_exit_code: Some(0),
+        launch_argv: Some(vec![
+            "codex".to_string(),
+            "--resume".to_string(),
+            "abc123".to_string(),
+            "--dangerously-bypass-approvals-and-sandbox".to_string(),
+        ]),
+        permission_mode: AgentPermissionMode::Dangerous,
+        last_seen_at: 1234,
+        started_at: Some(1200),
+        completed_at: None,
+        closed_intentionally_at: None,
+        app_run_id: Some("previous-run".to_string()),
+        recovery_offered_run_id: None,
+        restore_payload: Some(serde_json::json!({
+            "cwd": "/tmp/warp-session-memory-test",
+            "resume_id": "abc123"
+        })),
+    };
+
+    handle_model_event(
+        ModelEvent::UpsertSessionMemoryRecord {
+            record: record.clone(),
+        },
+        &mut conn,
+    )
+    .expect("session memory record should upsert");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
+    assert_eq!(restored.session_memory_records, vec![record.clone()]);
+
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryRecordClosed {
+            id: record.id.clone(),
+            closed_intentionally_at: 1300,
+        },
+        &mut conn,
+    )
+    .expect("session memory record should mark closed");
+
+    let closed = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .session_memory_records
+        .pop()
+        .expect("record should remain after mark closed");
+    assert_eq!(closed.closed_intentionally_at, Some(1300));
+    assert_eq!(closed.status, SessionMemoryStatus::UserClosed);
+    assert_eq!(
+        closed.cwd,
+        Some(PathBuf::from("/tmp/warp-session-memory-test"))
+    );
+    assert_eq!(closed.launch_argv, record.launch_argv);
+    assert_eq!(closed.permission_mode, AgentPermissionMode::Dangerous);
+
+    handle_model_event(
+        ModelEvent::DeleteSessionMemoryRecord { id: record.id },
+        &mut conn,
+    )
+    .expect("session memory record should delete");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
+    assert!(restored.session_memory_records.is_empty());
+}
+
+#[test]
+fn session_memory_record_upsert_clears_previously_set_optional_fields() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let mut record = SessionMemoryRecord {
+        id: "codex-abc123".to_string(),
+        source: SessionMemorySource::Codex,
+        kind: SessionMemoryKind::AgentChat,
+        status: SessionMemoryStatus::Live,
+        title: "Codex resume abc123".to_string(),
+        summary: None,
+        cwd: Some(PathBuf::from("/tmp/warp-session-memory-test")),
+        project: None,
+        native_session_id: Some("abc123".to_string()),
+        transcript_path: None,
+        terminal_pane_uuid: Some(vec![1, 2, 3, 4]),
+        app_window_fingerprint: None,
+        app_tab_fingerprint: None,
+        last_command: None,
+        last_exit_code: None,
+        launch_argv: None,
+        permission_mode: AgentPermissionMode::Dangerous,
+        last_seen_at: 1234,
+        started_at: None,
+        completed_at: None,
+        closed_intentionally_at: Some(1300),
+        app_run_id: Some("previous-run".to_string()),
+        recovery_offered_run_id: Some("previous-run".to_string()),
+        restore_payload: None,
+    };
+
+    handle_model_event(
+        ModelEvent::UpsertSessionMemoryRecord {
+            record: record.clone(),
+        },
+        &mut conn,
+    )
+    .expect("session memory record should upsert");
+
+    // The pane is alive again: a fresh upsert must clear the stale
+    // closed/offered markers, otherwise the record is misclassified as
+    // user-closed on the next startup and never auto-restored.
+    record.closed_intentionally_at = None;
+    record.recovery_offered_run_id = None;
+
+    handle_model_event(
+        ModelEvent::UpsertSessionMemoryRecord {
+            record: record.clone(),
+        },
+        &mut conn,
+    )
+    .expect("session memory record should upsert again");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .session_memory_records
+        .pop()
+        .expect("record should exist");
+    assert_eq!(restored.closed_intentionally_at, None);
+    assert_eq!(restored.recovery_offered_run_id, None);
+    assert_eq!(restored.status, SessionMemoryStatus::Live);
+}
+
+#[test]
+fn session_memory_app_run_tracks_recoverable_previous_run() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let first_run =
+        start_session_memory_app_run(&mut conn).expect("first session memory app run should start");
+    mark_session_memory_app_run_clean(&mut conn, &first_run.current_run_id, 100)
+        .expect("first run should be marked clean");
+
+    let second_run = start_session_memory_app_run(&mut conn)
+        .expect("second session memory app run should start");
+    assert_eq!(
+        second_run.previous_run_id.as_deref(),
+        Some(first_run.current_run_id.as_str())
+    );
+    assert_eq!(second_run.recoverable_run_id, None);
+
+    let third_run =
+        start_session_memory_app_run(&mut conn).expect("third session memory app run should start");
+    assert_eq!(
+        third_run.previous_run_id.as_deref(),
+        Some(second_run.current_run_id.as_str())
+    );
+    assert_eq!(
+        third_run.recoverable_run_id.as_deref(),
+        Some(second_run.current_run_id.as_str())
     );
 }

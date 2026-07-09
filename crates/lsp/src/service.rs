@@ -1,23 +1,13 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use crate::{
-    config::{lsp_uri_to_path, path_to_lsp_uri, LanguageId},
-    types::{
-        HoverResult, LspDefinitionLocation, ReferenceLocation, TextDocumentContentChangeEvent,
-        TextEdit, WatchedFileChangeEvent,
-    },
-    LspServerLogLevel,
-};
 use anyhow::Result;
 use globset::{Glob, GlobMatcher};
 use jsonrpc::{JsonRpcService, RequestId, ServerNotificationEvent};
+use lsp_types::notification::{self, Notification};
+use lsp_types::request::{self, Request};
 use lsp_types::{
-    notification::{self, Notification},
-    request::{self, Request},
     CancelParams, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentFormattingParams, FileChangeType, FileSystemWatcher,
@@ -29,7 +19,15 @@ use lsp_types::{
 use serde_json::Value;
 #[cfg(not(target_arch = "wasm32"))]
 use simple_logger::SimpleLogger;
+use warp_core::report_error;
 use warp_util::on_cancel::OnCancelFutureExt;
+
+use crate::config::{lsp_uri_to_path, path_to_lsp_uri, LanguageId};
+use crate::types::{
+    HoverResult, LspDefinitionLocation, ReferenceLocation, TextDocumentContentChangeEvent,
+    TextEdit, WatchedFileChangeEvent,
+};
+use crate::LspServerLogLevel;
 
 /// Tracks the sync state for an open document.
 #[derive(Debug, Clone)]
@@ -315,7 +313,7 @@ impl LspService {
             .jsonrpc_service
             .send_notification(notification::Cancel::METHOD.to_string(), cancel)
         {
-            log::error!("Failed to send cancel notification: {e}");
+            report_error!(e.context("Failed to send cancel notification"));
         }
     }
 }

@@ -524,10 +524,11 @@ fn delete_and_notify_emits_model_event_for_board_subscribers() {
         let model_handle = app.add_model(|_| SessionMemoryModel::new(vec![record], None));
         let (sender, receiver) = async_channel::unbounded();
 
-        model_handle.update(&mut app, {
+        let observer = app.add_model(|_| SessionMemoryModel::new(Vec::new(), None));
+        observer.update(&mut app, {
             let model_handle = model_handle.clone();
             move |_, ctx| {
-                ctx.subscribe_to_model(&model_handle, move |_, event, _| {
+                ctx.subscribe_to_model(&model_handle, move |_, _, event, _| {
                     let _ = sender.try_send(event.clone());
                 });
             }
@@ -554,10 +555,11 @@ fn upsert_and_notify_emits_model_event_for_board_subscribers() {
         let (sender, receiver) = async_channel::unbounded();
         let record = test_record("codex-1");
 
-        model_handle.update(&mut app, {
+        let observer = app.add_model(|_| SessionMemoryModel::new(Vec::new(), None));
+        observer.update(&mut app, {
             let model_handle = model_handle.clone();
             move |_, ctx| {
-                ctx.subscribe_to_model(&model_handle, move |_, event, _| {
+                ctx.subscribe_to_model(&model_handle, move |_, _, event, _| {
                     let _ = sender.try_send(event.clone());
                 });
             }

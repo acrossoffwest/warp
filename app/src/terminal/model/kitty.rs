@@ -1,20 +1,23 @@
+use std::cmp::min;
+use std::io::Read;
+#[cfg(feature = "local_fs")]
+use std::{env, fs, str};
+
 use anyhow::Result;
 use base64::Engine;
 use flate2::read::ZlibDecoder;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
-use std::cmp::min;
-use std::io::Read;
-#[cfg(feature = "local_fs")]
-use std::{env, fs, str};
-use warpui::image_cache::{resize_dimensions, FitType};
-use warpui::{
-    assets::asset_cache::Asset,
-    image_cache::{CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, ImageType},
-    util::{parse_i32, parse_u32},
+use warpui::assets::asset_cache::Asset;
+use warpui::image_cache::{
+    resize_dimensions, CustomHeaderCreationError, CustomImageFormat, CustomImageHeader, FitType,
+    ImageType,
 };
+use warpui::util::{parse_i32, parse_u32};
 
 use super::escape_sequences::C1;
+#[cfg(feature = "local_fs")]
+use crate::report_error;
 
 /// Actions specified by the [Kitty Image Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 #[derive(Debug, Clone)]
@@ -761,7 +764,10 @@ fn read_file(decoded_payload: Vec<u8>, is_temp: bool) -> Result<Vec<u8>, Invalid
 fn safe_delete_temp_file(path: &str) {
     if is_path_in_temp_dir(path) && path.contains("tty-graphics-protocol") {
         if let Err(err) = fs::remove_file(path) {
-            log::error!("Failed to delete kitty temporary file (path = {path}): {err}");
+            report_error!(
+                anyhow::Error::new(err).context("Failed to delete kitty temporary file"),
+                extra: { "path" => %path }
+            );
         }
     }
 }
@@ -834,11 +840,10 @@ fn read_from_shared_memory_fd(
     fd: i32,
     size: Option<usize>,
 ) -> Result<Vec<u8>, InvalidKittyPayload> {
-    use nix::sys::{
-        mman::{mmap, MapFlags, ProtFlags},
-        stat::fstat,
-    };
     use std::num::NonZero;
+
+    use nix::sys::mman::{mmap, MapFlags, ProtFlags};
+    use nix::sys::stat::fstat;
 
     let file_size = match fstat(fd) {
         Ok(stat) => stat.st_size,

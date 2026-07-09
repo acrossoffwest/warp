@@ -1,37 +1,30 @@
 use std::sync::Arc;
 
-use crate::{
-    ai::{
-        llms::{is_using_api_key_for_provider, LLMPreferences},
-        AIRequestUsageModel, BuyCreditsBannerDisplayState,
-    },
-    appearance::Appearance,
-    settings::{AISettings, InputSettings},
-    terminal::{
-        buy_credits_banner::BuyCreditsBanner,
-        input::{Input, InputAction, InputSuggestionsMode, MenuPositioning},
-        model::TerminalModel,
-        view::{TerminalAction, PADDING_LEFT},
-    },
-    ui_components::icons::Icon,
-    workspaces::user_workspaces::UserWorkspaces,
-};
 use pathfinder_geometry::vector::vec2f;
 use vim::vim::{VimMode, VimState};
 use warp_completer::completer::Description;
 use warp_core::features::FeatureFlag;
-use warpui::{
-    elements::{
-        AnchorPair, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex, OffsetPositioning,
-        OffsetType, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds,
-        PositioningAxis, Radius, Shrinkable, Stack, Text, XAxisAnchor,
-    },
-    fonts::Weight,
-    presenter::ChildView,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, EntityId, SingletonEntity, ViewHandle,
+use warpui::elements::{
+    AnchorPair, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, Element, EventHandler, Flex, OffsetPositioning, OffsetType, ParentAnchor,
+    ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
+    Shrinkable, Stack, Text, XAxisAnchor,
 };
+use warpui::fonts::Weight;
+use warpui::presenter::ChildView;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle};
+
+use crate::ai::llms::{should_show_key_icon_for_model, LLMPreferences};
+use crate::ai::{AIRequestUsageModel, BuyCreditsBannerDisplayState};
+use crate::appearance::Appearance;
+use crate::settings::{AISettings, InputSettings};
+use crate::terminal::buy_credits_banner::BuyCreditsBanner;
+use crate::terminal::input::{Input, InputAction, InputSuggestionsMode, MenuPositioning};
+use crate::terminal::model::TerminalModel;
+use crate::terminal::view::{TerminalAction, PADDING_LEFT};
+use crate::ui_components::icons::Icon;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Whether the terminal input message bar should be shown.
 ///
@@ -503,10 +496,8 @@ pub(super) fn maybe_add_buy_credits_banner(
         ai_request_usage.compute_buy_addon_credits_banner_display_state(app),
         BuyCreditsBannerDisplayState::Hidden
     );
-    let is_using_api_key_for_current_model = is_using_api_key_for_provider(
-        &LLMPreferences::as_ref(app)
-            .get_active_base_model(app, Some(terminal_view_id))
-            .provider,
+    let is_using_api_key_for_current_model = should_show_key_icon_for_model(
+        LLMPreferences::as_ref(app).get_active_base_model(app, Some(terminal_view_id)),
         app,
     );
     if can_purchase_addon_credits

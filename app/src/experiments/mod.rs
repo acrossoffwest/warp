@@ -8,26 +8,25 @@
 mod block_onboarding_layer;
 mod login_layer;
 mod rendering;
-pub use block_onboarding_layer::{BlockOnboarding, BLOCK_ONBOARDING_LAYER};
-pub use free_tier_default_model_layer::{FreeTierDefaultModel, FREE_TIER_DEFAULT_MODEL_LAYER};
-pub use improved_palette_search_layer::{ImprovedPaletteSearch, IMPROVED_PALETTE_SEARCH_LAYER};
-pub use login_layer::{AuthFlowInstructions, LOGIN_LAYER};
-use warp_core::user_preferences::GetUserPreferences as _;
-
-use crate::auth::auth_state::AuthStateProvider;
-use crate::channel::{Channel, ChannelState};
-use anyhow::Result;
-use dashmap::DashMap;
-use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::fmt;
+use std::hash::Hasher;
 use std::marker::Copy;
 use std::ops::Range;
 use std::str::FromStr;
-use std::{collections::HashMap, hash::Hasher};
 
+use anyhow::Result;
+pub use block_onboarding_layer::{BlockOnboarding, BLOCK_ONBOARDING_LAYER};
+use dashmap::DashMap;
+pub use improved_palette_search_layer::{ImprovedPaletteSearch, IMPROVED_PALETTE_SEARCH_LAYER};
+use lazy_static::lazy_static;
+pub use login_layer::{AuthFlowInstructions, LOGIN_LAYER};
+use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::send_telemetry_sync_from_app_ctx;
+use crate::auth::auth_state::AuthStateProvider;
+use crate::channel::{Channel, ChannelState};
+use crate::{report_error, send_telemetry_sync_from_app_ctx};
 
 /// Number of buckets we are using to partition user traffic. The largest valid
 /// bucket index is NUM_BUCKETS - 1.
@@ -70,7 +69,6 @@ lazy_static! {
         &*BLOCK_ONBOARDING_LAYER,
         &*rendering::LAYER,
         &*IMPROVED_PALETTE_SEARCH_LAYER,
-        &*FREE_TIER_DEFAULT_MODEL_LAYER,
     ];
 
     /// Mapping of experiments to their respective layers. The mappings are built up
@@ -173,7 +171,10 @@ impl Layer {
     /// the experiment group for that range, or None if no satisfying range was found.
     fn get_group_for_bucket(&self, bucket: u16) -> Option<GroupId> {
         if bucket >= NUM_BUCKETS {
-            log::error!("User assigned a bucket greater than the max: {bucket}");
+            report_error!(
+                "User assigned a bucket greater than the max",
+                extra: { "bucket" => %bucket }
+            );
             return None;
         }
         for BucketRange { group, range } in self.bucket_ranges.iter() {
@@ -227,7 +228,10 @@ pub trait Experiment<T: Experiment<T>>: FromStr {
                 if cfg!(debug_assertions) {
                     panic!("{}: {}", NO_LAYER_FOUND_ERR, Self::name());
                 } else {
-                    log::error!("{}: {}", NO_LAYER_FOUND_ERR, Self::name());
+                    report_error!(
+                        anyhow::anyhow!("{NO_LAYER_FOUND_ERR}"),
+                        extra: { "experiment" => %Self::name() }
+                    );
                 }
                 &EMPTY_LAYER
             }
@@ -294,7 +298,10 @@ pub trait Experiment<T: Experiment<T>>: FromStr {
                     if cfg!(debug_assertions) {
                         panic!("{INVALID_GROUP_ASSIGNMENT_ERR}: {e:?}");
                     } else {
-                        log::error!("{INVALID_GROUP_ASSIGNMENT_ERR}: {e:?}");
+                        report_error!(
+                            anyhow::anyhow!("{INVALID_GROUP_ASSIGNMENT_ERR}"),
+                            extra: { "error" => ?e }
+                        );
                     }
                 }
             };
@@ -309,7 +316,10 @@ pub trait Experiment<T: Experiment<T>>: FromStr {
                 match T::from_str(&variant) {
                     Ok(group) => assigned_group = Some(group),
                     Err(e) => {
-                        log::error!("{INVALID_USER_OVERRIDE_ERR}: {e:?}");
+                        report_error!(
+                            anyhow::anyhow!("{INVALID_USER_OVERRIDE_ERR}"),
+                            extra: { "error" => ?e }
+                        );
                     }
                 };
             }
@@ -405,7 +415,6 @@ pub fn init(ctx: &mut AppContext) {
 #[path = "mod_tests.rs"]
 mod tests;
 
-mod free_tier_default_model_layer;
 mod improved_palette_search_layer;
 #[cfg(test)]
 mod validation_tests;

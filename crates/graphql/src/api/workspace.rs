@@ -1,6 +1,5 @@
+use super::billing::{BillingCycleUsageHistory, BillingMetadata, BonusGrantsInfo};
 use crate::schema;
-
-use super::billing::{BillingMetadata, BonusGrantsInfo};
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Workspace {
@@ -11,6 +10,7 @@ pub struct Workspace {
     pub teams: Vec<Team>,
     pub billing_metadata: BillingMetadata,
     pub bonus_grants_info: BonusGrantsInfo,
+    pub billing_cycle_usage_history: Option<BillingCycleUsageHistory>,
     pub settings: WorkspaceSettings,
     pub has_billing_history: bool,
     pub invite_code: Option<String>,
@@ -140,6 +140,7 @@ pub struct WorkspaceSettings {
     pub is_discoverable: bool,
     pub is_invite_link_enabled: bool,
     pub llm_settings: LlmSettings,
+    pub team_byo: Option<TeamByoSettings>,
     pub telemetry_settings: TelemetrySettings,
     pub ugc_collection_settings: UgcCollectionSettings,
     pub cloud_conversation_storage_settings: CloudConversationStorageSettings,
@@ -152,6 +153,40 @@ pub struct WorkspaceSettings {
     pub codebase_context_settings: CodebaseContextSettings,
     pub sandboxed_agent_settings: Option<SandboxedAgentSettings>,
     pub ambient_agent_settings: Option<AmbientAgentSettings>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TeamByoSettings {
+    pub first_party_enabled: bool,
+    pub endpoints_enabled: bool,
+    pub allow_user_keys: bool,
+    pub allow_user_endpoints: bool,
+    pub first_party_keys: Vec<ByoFirstPartyKey>,
+    pub endpoints: Vec<ByoEndpointMetadata>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ByoFirstPartyKey {
+    pub provider: LlmProvider,
+    pub credential_uid: cynic::Id,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ByoEndpointMetadata {
+    pub uid: cynic::Id,
+    pub name: String,
+    pub enabled: bool,
+    pub credential_uid: cynic::Id,
+    pub models: Vec<ByoEndpointModelMetadata>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ByoEndpointModelMetadata {
+    pub config_key: String,
+    pub slug: String,
+    pub alias: Option<String>,
+    pub display_name: String,
+    pub enabled: bool,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -285,7 +320,9 @@ pub enum MembershipRole {
 #[derive(cynic::Enum, Clone, Debug)]
 pub enum LlmModelHost {
     AwsBedrock,
+    CustomEndpoint,
     DirectApi,
+    GeminiEnterprise,
     #[cynic(fallback)]
     Other(String),
 }
@@ -302,6 +339,8 @@ pub struct LlmHostSettings {
     pub enabled: bool,
     pub opt_out_of_new_models: bool,
     pub enablement_setting: Option<HostEnablementSetting>,
+    pub gcp_audience: Option<String>,
+    pub gcp_sa_email: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

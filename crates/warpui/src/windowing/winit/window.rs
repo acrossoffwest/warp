@@ -4,14 +4,12 @@ mod x11;
 #[cfg(windows)]
 mod windows_wm;
 
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::LazyLock;
-use std::{
-    cell::{Cell, OnceCell, RefCell},
-    rc::Rc,
-};
 
 use anyhow::{Context as _, Result};
 use itertools::Itertools;
@@ -19,44 +17,36 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_errors::report_error;
 use wgpu::rwh::HasDisplayHandle;
 use wgpu::{AdapterInfo, CompositeAlphaMode};
-use winit::dpi::PhysicalPosition;
+#[cfg(windows)]
+use windows::Win32::Graphics::Dwm;
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use winit::error::ExternalError;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy, OwnedDisplayHandle};
 #[cfg(not(target_family = "wasm"))]
 use winit::monitor::MonitorHandle;
 #[cfg(windows)]
 use winit::platform::windows::{BackdropType, WindowExtWindows};
-use winit::window::{CursorIcon, ResizeDirection, UserAttentionType, WindowLevel};
-use winit::{
-    dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size},
-    window::Fullscreen,
-};
+use winit::window::{CursorIcon, Fullscreen, ResizeDirection, UserAttentionType, WindowLevel};
 
+use super::app::CustomEvent;
+#[cfg(windows)]
+use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
     self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowFocusBehavior,
     WindowOptions, WindowStyle,
 };
-use crate::rendering::{
-    wgpu::{
-        adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
-        Resources,
-    },
-    GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected,
+use crate::rendering::wgpu::{
+    adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
+    Resources,
 };
+use crate::rendering::{GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected};
 use crate::windowing::WindowCallbacks;
-use crate::{fonts, geometry, Scene};
-use crate::{DisplayId, DisplayIdx, OptionalPlatformWindow, WindowId};
-
-use super::app::CustomEvent;
-
-#[cfg(windows)]
-use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
-#[cfg(windows)]
-use windows::Win32::Graphics::Dwm;
+use crate::{fonts, geometry, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId};
 
 /// The inner margin from the edges of the window within which the mouse can drag to resize the
 /// window. Note that this value is a logical size, not a physical size. It can be converted to a
@@ -67,20 +57,11 @@ const DRAG_RESIZE_MARGIN: f32 = 4.0;
 #[cfg(windows)]
 const IDI_ICON: u16 = 0x101;
 
-cfg_if::cfg_if! {
-    if #[cfg(any(test, feature = "integration_tests"))] {
-        /// The window cannot be resized smaller than this.
-        /// TODO(CORE-1891) Instead of being hard-coded, this should be configurable by the user via
-        /// [`crate::platform::WindowOptions`].
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(124., 34.);
-    } else {
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(480., 192.);
-    }
-}
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(
+    crate::windowing::MIN_WINDOW_WIDTH as f64,
+    crate::windowing::MIN_WINDOW_HEIGHT as f64,
+);
 
 lazy_static! {
     static ref DEFAULT_WINDOW_SIZE: Vector2F = Vector2F::new(1280., 800.);
@@ -150,7 +131,7 @@ impl WindowManager {
             x11_manager: match x11::X11Manager::new() {
                 Ok(x11_manager) => Some(x11_manager),
                 Err(err) => {
-                    log::error!("error creating connection to Xorg server: {err:?}");
+                    report_error!(err.context("error creating connection to Xorg server"));
                     None
                 }
             },
@@ -292,6 +273,12 @@ impl platform::WindowManager for WindowManager {
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF) {
         if let Some(window) = self.windows.get(&window_id) {
             window.set_bounds(bound);
+        }
+    }
+
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        if let Some(window) = self.windows.get(&window_id) {
+            window.set_alpha(alpha);
         }
     }
 
@@ -602,6 +589,10 @@ impl platform::WindowManager for IntegrationTestWindowManager {
         self.window_manager.set_window_bounds(window_id, bound)
     }
 
+    fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        self.window_manager.set_window_alpha(window_id, alpha)
+    }
+
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8) {
         self.window_manager
             .set_all_windows_background_blur_radius(blur_radius_pixels)
@@ -853,7 +844,7 @@ impl Window {
         }
 
         let Some(scene) = scene.clone() else {
-            log::error!(
+            report_error!(
                 "A redraw of the window was requested but no scene was available to render"
             );
             return Ok(());
@@ -956,7 +947,7 @@ impl Window {
         {
             Ok(resources) => resources,
             Err(err) => {
-                log::error!("{err:#}");
+                report_error!(err.context("Failed to create window resources"));
                 return;
             }
         };
@@ -1230,6 +1221,31 @@ impl Window {
         }
     }
 
+    /// Sets the window's uniform opacity, where `1.0` is fully opaque and `0.0`
+    /// is fully transparent. Used to cheaply hide the cross-window tab-drag
+    /// preview while hovering over a target window, without changing the
+    /// window's z-order or focus. Best-effort: a no-op on platforms / windowing
+    /// systems that don't support per-window opacity (e.g. Wayland).
+    fn set_alpha(&self, alpha: f32) {
+        let inner = self.inner.borrow();
+        let Some(Inner { window, .. }) = inner.as_ref() else {
+            return;
+        };
+
+        #[cfg(windows)]
+        {
+            use crate::windowing::winit::windows::WindowExt;
+            if let Err(err) = window.set_alpha(alpha) {
+                log::warn!("Failed to set window alpha: {err:#?}");
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            // No per-window opacity support (e.g. wasm); avoid unused warnings.
+            let _ = (window, alpha);
+        }
+    }
+
     fn set_title(&self, title: &str) {
         if let Some(Inner { window, .. }) = self.inner.borrow().as_ref() {
             window.set_title(title)
@@ -1263,8 +1279,7 @@ fn create_window(
     _window_class: &Option<String>,
     _tiling_window_manager: bool,
 ) -> Result<winit::window::Window> {
-    use winit::platform::web::WindowAttributesExtWebSys;
-    use winit::platform::web::WindowExtWebSys;
+    use winit::platform::web::{WindowAttributesExtWebSys, WindowExtWebSys};
 
     use crate::platform::current::add_prevent_default_listener;
 
@@ -1437,6 +1452,18 @@ fn create_window(
         .create_window(window_attributes)
         .map_err(Into::into);
 
+    #[cfg(target_os = "linux")]
+    if let Ok(window) = created_window.as_ref() {
+        use wgpu::rwh::RawDisplayHandle;
+        let is_x11 = matches!(
+            window_target.display_handle().map(|dh| dh.as_raw()),
+            Ok(RawDisplayHandle::Xlib(_)) | Ok(RawDisplayHandle::Xcb(_))
+        );
+        if is_x11 {
+            window.set_ime_allowed(true);
+        }
+    }
+
     #[cfg(windows)]
     {
         use super::windows::WindowExt;
@@ -1447,7 +1474,7 @@ fn create_window(
             // This differs from `visible` which is not composited.
             // The window is uncloaked after the drawing the first frame.
             if let Err(e) = window.set_cloaked(true) {
-                log::error!("Failed to mark window as cloaked: {e:#?}");
+                report_error!(anyhow::Error::new(e).context("Failed to mark window as cloaked"));
             };
 
             if let Some(adjustment) = maybe_adjust_window_vertically(window) {
@@ -1485,7 +1512,9 @@ fn create_window(
                         log::info!("Rounded window corners not supported on Windows 10");
                     }
                     _ => {
-                        log::error!("Error setting rounded window corners: {err:#}");
+                        report_error!(
+                            anyhow::Error::new(err).context("Error setting rounded window corners")
+                        );
                     }
                 }
             }
@@ -1500,13 +1529,6 @@ fn create_window(
                 }
             };
         }
-    }
-
-    #[cfg(target_os = "linux")]
-    if let Ok(window) = created_window.as_ref() {
-        // On Linux/Wayland, winit only sends `zwp_text_input_v3.enable()` when IME is allowed,
-        // so without this call IME stays inactive and non-Latin input (CJK, etc.) is unusable.
-        window.set_ime_allowed(true);
     }
 
     created_window

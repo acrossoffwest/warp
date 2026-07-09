@@ -1,18 +1,32 @@
-use crate::ai::mcp::templatable::GalleryData;
-use crate::ai::mcp::MCPServerUpdate;
-use crate::modal::Modal;
-use crate::modal::ModalEvent;
-use crate::modal::ModalViewState;
-use crate::server::telemetry::{MCPTemplateInstallationSource, TelemetryEvent};
-use crate::settings::{AISettings, AISettingsChangedEvent};
-use crate::settings_view::mcp_servers_page::InstallOrigin;
-use crate::settings_view::settings_page::{
-    build_toggle_element, render_body_item_label, LocalOnlyIconState, ToggleState,
-};
-use crate::util::truncation::truncate_from_end;
-use crate::view_components::DismissibleToast;
-use crate::ToastStack;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
+use settings::ToggleableSetting as _;
+use strum::IntoEnumIterator;
+use uuid::Uuid;
+use warp_core::features::FeatureFlag;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::appearance::AppearanceEvent;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
+    MainAxisSize, ParentElement, Radius, Text,
+};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
+
+use crate::ai::mcp::gallery::MCPGalleryManagerEvent;
+use crate::ai::mcp::templatable::{GalleryData, TemplatableMCPServer};
+use crate::ai::mcp::templatable_manager::{
+    TemplatableMCPServerManager, TemplatableMCPServerManagerEvent,
+};
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{
     // Import events for file-based manager and watcher conditionally
@@ -21,59 +35,39 @@ use crate::ai::mcp::{
     FileMCPWatcher,
     FileMCPWatcherEvent,
 };
-
-use crate::{
-    ai::mcp::{
-        gallery::MCPGalleryManagerEvent,
-        logs,
-        templatable::TemplatableMCPServer,
-        templatable_manager::{TemplatableMCPServerManager, TemplatableMCPServerManagerEvent},
-        FileBasedMCPManager, MCPGalleryManager, MCPProvider, TemplatableMCPServerInstallation,
-    },
-    appearance::Appearance,
-    cloud_object::{
-        model::persistence::{CloudModel, CloudModelEvent},
-        GenericStringObjectFormat, JsonObjectType,
-    },
-    drive::CloudObjectTypeAndId,
-    editor::{EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions},
-    pane_group::Direction,
-    search_bar::SearchBar,
-    settings_view::mcp_servers::{
-        server_card::{
-            ServerCardEvent, ServerCardOptions, ServerCardStatus, ServerCardView, TitleChip,
-        },
-        style,
-        update_modal::{UpdateModalBody, UpdateModalBodyEvent},
-        ServerCardItemId,
-    },
-    ui_components::blended_colors,
-    view_components::action_button::{ActionButton, NakedTheme},
-    workflows::local_workflows::tail_command_for_shell,
-    workspace::Workspace,
-    workspaces::user_workspaces::UserWorkspaces,
+use crate::ai::mcp::{
+    logs, FileBasedMCPManager, MCPGalleryManager, MCPProvider, MCPServerUpdate,
+    TemplatableMCPServerInstallation,
 };
-use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use settings::ToggleableSetting as _;
-use std::cmp::Ordering;
-use std::{collections::HashMap, path::PathBuf};
-use strum::IntoEnumIterator;
-use uuid::Uuid;
-use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::{appearance::AppearanceEvent, theme::color::internal_colors, Icon};
-use warpui::{
-    elements::{
-        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
-        MainAxisSize, ParentElement, Radius, Text,
-    },
-    ui_components::{
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+use crate::appearance::Appearance;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType};
+use crate::drive::CloudObjectTypeAndId;
+use crate::editor::{
+    EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
 };
+use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::pane_group::Direction;
+use crate::search_bar::SearchBar;
+use crate::server::telemetry::{MCPTemplateInstallationSource, TelemetryEvent};
+use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings_view::mcp_servers::server_card::{
+    ServerCardEvent, ServerCardOptions, ServerCardStatus, ServerCardView, TitleChip,
+};
+use crate::settings_view::mcp_servers::update_modal::{UpdateModalBody, UpdateModalBodyEvent};
+use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::settings_view::mcp_servers_page::InstallOrigin;
+use crate::settings_view::settings_page::{
+    build_toggle_element, render_body_item_label, LocalOnlyIconState, ToggleState,
+};
+use crate::ui_components::blended_colors;
+use crate::util::truncation::truncate_from_end;
+use crate::view_components::action_button::{ActionButton, NakedTheme};
+use crate::view_components::DismissibleToast;
+use crate::workflows::local_workflows::tail_command_for_shell;
+use crate::workspace::Workspace;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{report_error, ToastStack};
 
 const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
 
@@ -187,7 +181,7 @@ impl MCPServersListPageView {
             }
         });
 
-        let update_modal_body = ctx.add_typed_action_view(|_ctx| UpdateModalBody::new());
+        let update_modal_body = ctx.add_typed_action_view(UpdateModalBody::new);
         ctx.subscribe_to_view(&update_modal_body, |me, _, event, ctx| {
             me.handle_update_modal_body_event(event, ctx);
         });
@@ -615,7 +609,7 @@ impl MCPServersListPageView {
             .views_of_type::<Workspace>(window_id)
             .and_then(|views| views.first().cloned())
         else {
-            log::error!("Could not find workspace when attempting to open MCP logs.");
+            report_error!("Could not find workspace when attempting to open MCP logs.");
             return;
         };
 
@@ -629,7 +623,9 @@ impl MCPServersListPageView {
             });
             let Some(terminal_view_handle) = active_pane_group.as_ref(ctx).active_session_view(ctx)
             else {
-                log::error!("Could not get terminal view handle when attempting to open MCP logs.");
+                report_error!(
+                    "Could not get terminal view handle when attempting to open MCP logs."
+                );
                 return;
             };
 
@@ -654,15 +650,15 @@ impl MCPServersListPageView {
                     self.share_templatable_mcp_server_installation(*installation_uuid, ctx);
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Share is not implemented for gallery MCP items.")
+                    report_error!("Share is not implemented for gallery MCP items.")
                 }
                 ServerCardItemId::FileBasedMCP(_) => {
-                    log::error!("Share is not implemented for file-based MCP servers.")
+                    report_error!("Share is not implemented for file-based MCP servers.")
                 }
             },
             ServerCardEvent::ViewLogs(item_id) => match item_id {
                 ServerCardItemId::TemplatableMCP(_) => {
-                    log::error!("Viewing logs is not implemented for templatable MCP.");
+                    report_error!("Viewing logs is not implemented for templatable MCP.");
                 }
                 ServerCardItemId::TemplatableMCPInstallation(installation_uuid) => {
                     if let Some(template_uuid) = TemplatableMCPServerManager::as_ref(ctx)
@@ -671,8 +667,9 @@ impl MCPServersListPageView {
                         let log_path = logs::log_file_path_from_uuid(&template_uuid);
                         self.open_logs_for_server(&log_path, ctx);
                     } else {
-                        log::error!(
-                            "Could not find template_uuid for installation {installation_uuid}"
+                        report_error!(
+                            "Could not find template_uuid for installation",
+                            extra: { "installation_uuid" => %installation_uuid }
                         );
                     }
                 }
@@ -683,16 +680,19 @@ impl MCPServersListPageView {
                         let log_path = logs::log_file_path_from_uuid(&installation.template_uuid());
                         self.open_logs_for_server(&log_path, ctx);
                     } else {
-                        log::error!("Could not find installation for file-based server {uuid}");
+                        report_error!(
+                            "Could not find installation for file-based server",
+                            extra: { "uuid" => %uuid }
+                        );
                     }
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Viewing logs is not implemented for gallery MCP items.")
+                    report_error!("Viewing logs is not implemented for gallery MCP items.")
                 }
             },
             ServerCardEvent::ToggleRunningSwitch(item_id, switch_state) => match item_id {
                 ServerCardItemId::TemplatableMCP(_) => {
-                    log::error!("Running a server is not implemented for templatable MCP.");
+                    report_error!("Running a server is not implemented for templatable MCP.");
                 }
                 ServerCardItemId::TemplatableMCPInstallation(uuid) => {
                     self.toggle_server_running_templatable(*uuid, *switch_state, ctx);
@@ -701,7 +701,7 @@ impl MCPServersListPageView {
                     self.toggle_server_running_file_based(*uuid, *switch_state, ctx);
                 }
                 ServerCardItemId::GalleryMCP(_) => {
-                    log::error!("Running a server is not implemented for gallery MCP items.")
+                    report_error!("Running a server is not implemented for gallery MCP items.")
                 }
             },
             ServerCardEvent::Install(item_id) => match item_id {
@@ -741,7 +741,7 @@ impl MCPServersListPageView {
             ServerCardEvent::InstallServerUpdate(item_id) => {
                 let ServerCardItemId::TemplatableMCPInstallation(installation_uuid) = item_id
                 else {
-                    log::error!(
+                    report_error!(
                         "Install server update is only supported for templatable MCP installations"
                     );
                     return;
@@ -778,7 +778,7 @@ impl MCPServersListPageView {
         } else {
             self.update_modal_state.view.update(ctx, |modal, ctx| {
                 modal.body().update(ctx, |body, ctx| {
-                    body.set_installation(installation_uuid, server_name, available_updates);
+                    body.set_installation(installation_uuid, server_name, available_updates, ctx);
                     ctx.notify();
                 });
             });
@@ -997,8 +997,8 @@ impl MCPServersListPageView {
         match event {
             UpdateModalBodyEvent::Cancel => {
                 self.update_modal_state.view.update(ctx, |modal, ctx| {
-                    modal.body().update(ctx, |body, _ctx| {
-                        body.clear();
+                    modal.body().update(ctx, |body, ctx| {
+                        body.clear(ctx);
                     });
                 });
                 self.update_modal_state.close();
@@ -1015,8 +1015,8 @@ impl MCPServersListPageView {
                 };
                 self.process_server_update(*installation_uuid, update.clone(), ctx);
                 self.update_modal_state.view.update(ctx, |modal, ctx| {
-                    modal.body().update(ctx, |body, _ctx| {
-                        body.clear();
+                    modal.body().update(ctx, |body, ctx| {
+                        body.clear(ctx);
                     });
                 });
                 self.update_modal_state.close();

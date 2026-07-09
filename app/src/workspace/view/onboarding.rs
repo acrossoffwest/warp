@@ -1,17 +1,18 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use onboarding::{ProjectOnboardingSettings, SelectedSettings};
+use warp_core::execution_mode::AppExecutionMode;
+use warpui::{SingletonEntity as _, ViewContext};
+
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::settings::AISettings;
-use crate::terminal;
 use crate::terminal::view::{
     AgentOnboardingVersion, OnboardingIntention, OnboardingVersion, TerminalAction,
 };
 use crate::workspace::Workspace;
-use crate::FeatureFlag;
-use onboarding::{ProjectOnboardingSettings, SelectedSettings};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use warp_core::execution_mode::AppExecutionMode;
-use warpui::{SingletonEntity as _, ViewContext};
+use crate::{report_error, terminal, FeatureFlag};
 
 /// Configuration for starting the agent onboarding tutorial.
 #[derive(Debug, Clone)]
@@ -101,7 +102,10 @@ impl Workspace {
             } => {
                 // Open the repository - this will create a new terminal and trigger init
                 let Some(path_str) = path.to_str() else {
-                    log::error!("Failed to convert path to string: {path:?}");
+                    report_error!(
+                        "Failed to convert path to string",
+                        extra: { "path" => ?path }
+                    );
                     return;
                 };
                 self.handle_open_repository(path_str, ctx);

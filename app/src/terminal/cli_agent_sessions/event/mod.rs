@@ -2,6 +2,7 @@ mod v1;
 
 use serde::Deserialize;
 
+use crate::report_error;
 use crate::terminal::CLIAgent;
 
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
@@ -23,6 +24,15 @@ pub enum CLIAgentEventType {
     QuestionAsked,
     IdlePrompt,
     Unknown(String),
+}
+
+/// How a CLI agent event reached Warp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CLIAgentEventSource {
+    /// Structured OSC 777 notification from a rich plugin.
+    RichPlugin,
+    /// Native Codex OSC 9 fallback notification.
+    CodexOsc9Fallback,
 }
 
 /// Event-specific fields that vary by event type.
@@ -49,6 +59,7 @@ pub struct CLIAgentEvent {
     pub cwd: Option<String>,
     pub project: Option<String>,
     pub payload: CLIAgentEventPayload,
+    pub source: CLIAgentEventSource,
 }
 
 /// Version-specific parsers, indexed by (version - 1).
@@ -80,9 +91,9 @@ pub fn parse_event(title: Option<&str>, body: &str) -> Option<CLIAgentEvent> {
     match VERSIONED_PARSERS.get(index) {
         Some(parser) => parser(body),
         None => {
-            log::error!(
-                "Received CLI agent event with unsupported schema version \
-                 {version}. The CLI agent plugin or Warp may need to be updated."
+            report_error!(
+                "Received CLI agent event with unsupported schema version. The CLI agent plugin or Warp may need to be updated.",
+                extra: { "version" => %version }
             );
             None
         }

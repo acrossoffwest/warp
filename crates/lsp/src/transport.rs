@@ -3,17 +3,14 @@ use std::sync::Arc;
 use async_process::{Child, ChildStdin, ChildStdout, Stdio};
 use async_trait::async_trait;
 use command::r#async::Command;
+use futures::future::FutureExt;
+use futures::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use futures::lock::Mutex;
-use futures::{
-    future::FutureExt,
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
-};
 use jsonrpc::Transport;
 use simple_logger::SimpleLogger;
-use warpui::r#async::{
-    executor::{Background, BackgroundTask},
-    Timer,
-};
+use warp_core::report_error;
+use warpui_core::r#async::executor::{Background, BackgroundTask};
+use warpui_core::r#async::Timer;
 
 /// Transport implementation for LSP communication over process stdin/stdout.
 /// Also manages the LSP server process lifecycle with graceful shutdown capabilities.
@@ -78,12 +75,14 @@ impl ProcessTransport {
                         log::debug!("ProcessTransport [pid: {child_pid}] stderr: {message}");
                     }
                     Err(e) => {
-                        log::error!(
-                            "ProcessTransport [pid: {child_pid}]: Error reading stderr: {e}"
-                        );
                         if let Some(ref logger) = logger {
                             logger.log(format!("[error] Error reading stderr: {e}"));
                         }
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("ProcessTransport: Error reading stderr"),
+                            extra: { "pid" => %child_pid }
+                        );
                         break;
                     }
                 }

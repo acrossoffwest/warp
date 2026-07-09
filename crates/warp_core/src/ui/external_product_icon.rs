@@ -1,5 +1,6 @@
+use warpui_core::elements::Icon as WarpUiIcon;
+
 use crate::ui::theme::Fill;
-use warpui::elements::Icon as WarpUiIcon;
 
 pub enum ExternalProductIcon {
     Heroku,
@@ -8,6 +9,9 @@ pub enum ExternalProductIcon {
     Figma,
     Github,
     Slack,
+    Composio,
+    Resend,
+    Sentry,
 }
 
 impl ExternalProductIcon {
@@ -20,6 +24,9 @@ impl ExternalProductIcon {
             "figma" => Some(ExternalProductIcon::Figma),
             "github" => Some(ExternalProductIcon::Github),
             "slack" => Some(ExternalProductIcon::Slack),
+            "composio" => Some(ExternalProductIcon::Composio),
+            "resend" => Some(ExternalProductIcon::Resend),
+            "sentry" => Some(ExternalProductIcon::Sentry),
             _other => None,
         }
     }
@@ -32,6 +39,9 @@ impl ExternalProductIcon {
             ExternalProductIcon::Figma => "bundled/svg/figma.svg",
             ExternalProductIcon::Github => "bundled/svg/github.svg",
             ExternalProductIcon::Slack => "bundled/svg/slack-logo.svg",
+            ExternalProductIcon::Composio => "bundled/svg/composio.svg",
+            ExternalProductIcon::Resend => "bundled/svg/resend.svg",
+            ExternalProductIcon::Sentry => "bundled/svg/sentry.svg",
         }
     }
 

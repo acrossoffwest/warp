@@ -1,7 +1,9 @@
-use crate::{
-    billing::PricingInfo, experiment::Experiment, request_context::RequestContext, schema,
-    user::DiscoverableTeamData, workspace::Workspace,
-};
+use crate::billing::PricingInfo;
+use crate::experiment::Experiment;
+use crate::request_context::RequestContext;
+use crate::schema;
+use crate::user::DiscoverableTeamData;
+use crate::workspace::Workspace;
 
 /*
 query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
@@ -64,6 +66,16 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               byoApiKeyPolicy {
                 enabled
               }
+              byoEndpointPolicy {
+                enabled
+              }
+              managedByokByoePolicy {
+                enabled
+              }
+              usageVisibilityPolicy {
+                adminGranularity
+                maxPriorCycles
+              }
               pricing {
                 enablePayAsYouGo
                 autoReloadCreditDenomination
@@ -77,11 +89,52 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               type
             }
           }
+          billingCycleUsageHistory {
+            currentPeriodStart
+            currentPeriodEnd
+            summaries {
+              periodStart
+              periodEnd
+              entries {
+                subjectType
+                subjectUid
+                subjectDisplayName
+                costType
+                usageBucket
+                usageSource
+                creditsUsed
+                costCents
+              }
+            }
+          }
           settings {
             isDiscoverable
             isInviteLinkEnabled
             llmSettings {
               enabled
+            }
+            teamByo {
+              firstPartyEnabled
+              endpointsEnabled
+              allowUserKeys
+              allowUserEndpoints
+              firstPartyKeys {
+                provider
+                credentialUid
+              }
+              endpoints {
+                uid
+                name
+                enabled
+                credentialUid
+                models {
+                  configKey
+                  slug
+                  alias
+                  displayName
+                  enabled
+                }
+              }
             }
             telemetrySettings {
               forceEnabled

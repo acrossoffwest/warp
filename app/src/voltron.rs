@@ -13,21 +13,10 @@
 //!
 //!
 
-use crate::appearance::Appearance;
-use crate::editor::EditorView;
-use crate::editor::{
-    Event as EditorEvent, PlainTextEditorViewAction, PropagateAndNoOpNavigationKeys,
-    SingleLineEditorOptions,
-};
-use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::terminal::input::MenuPositioning;
-use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_VOLTRON_WIDTH};
-use crate::util::bindings::{self, CustomAction};
-use crate::workflows::categories::CategoriesView;
+use std::path::PathBuf;
 
 use enclose::enclose;
 use pathfinder_geometry::vector::Vector2F;
-use std::path::PathBuf;
 use vec1::Vec1;
 use warpui::accessibility::AccessibilityContent;
 use warpui::elements::{
@@ -44,6 +33,18 @@ use warpui::{
     AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
+
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PlainTextEditorViewAction, PropagateAndNoOpNavigationKeys,
+    SingleLineEditorOptions,
+};
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::report_error;
+use crate::terminal::input::MenuPositioning;
+use crate::terminal::resizable_data::{ModalType, ResizableData, DEFAULT_VOLTRON_WIDTH};
+use crate::util::bindings::{self, CustomAction};
+use crate::workflows::categories::CategoriesView;
 
 const DROPDOWN_BUTTON_WIDTH: f32 = 200.;
 const DROPDOWN_PADDING: f32 = 6.;
@@ -213,7 +214,7 @@ impl Voltron {
         {
             Some(handle) => handle,
             None => {
-                log::error!("Couldn't retrieve voltron resizable state handle.");
+                report_error!("Couldn't retrieve voltron resizable state handle.");
                 resizable_state_handle(DEFAULT_VOLTRON_WIDTH)
             }
         };

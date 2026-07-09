@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
 use super::env_var_collection_search_item::EnvVarCollectionSearchItem;
 use super::notebook_search_item::NotebookSearchItem;
 use super::workflow_search_item::WorkflowSearchItem;
@@ -8,6 +12,7 @@ use crate::cloud_object::{
 use crate::drive::folders::CloudFolder;
 use crate::env_vars::CloudEnvVarCollection;
 use crate::notebooks::CloudNotebook;
+use crate::report_error;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionResult;
@@ -18,8 +23,6 @@ use crate::search::QueryFilter;
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::settings::AISettings;
 use crate::workflows::CloudWorkflow;
-use std::collections::HashMap;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 /// Datasource that searches against all Warp Drive objects
 pub struct DataSource {
@@ -45,7 +48,7 @@ impl DataSource {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), Self::handle_cloud_object_updated);
         let mut searcher = Box::new(FuzzyWarpDriveSearcher::default());
         searcher.refresh_search_index(ctx).unwrap_or_else(|err| {
-            log::error!("Error refreshing search index: {err:?}");
+            report_error!(err.context("Error refreshing search index"));
         });
         DataSource { searcher }
     }
@@ -57,13 +60,14 @@ impl DataSource {
             ctx.background_executor(),
         ));
         searcher.refresh_search_index(ctx).unwrap_or_else(|err| {
-            log::error!("Error refreshing search index: {err:?}");
+            report_error!(err.context("Error refreshing search index"));
         });
         DataSource { searcher }
     }
 
     fn handle_cloud_object_updated(
         &mut self,
+        _: ModelHandle<CloudModel>,
         event: &CloudModelEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -74,7 +78,7 @@ impl DataSource {
             self.searcher
                 .refresh_search_index(ctx)
                 .unwrap_or_else(|err| {
-                    log::error!("Error refreshing search index after initial load: {err:?}");
+                    report_error!(err.context("Error refreshing search index after initial load"));
                 });
             return;
         }
@@ -89,17 +93,17 @@ impl DataSource {
                     self.searcher
                         .insert_searchable_object(obj, type_and_id.object_type(), ctx)
                         .unwrap_or_else(|err| {
-                            log::error!("Error inserting object into search index: {err:?}");
+                            report_error!(err.context("Error inserting object into search index"));
                         });
                 } else {
-                    log::error!("Object with ID {type_and_id:?} not found in CloudModel");
+                    report_error!("Object not found in CloudModel", extra: { "id" => ?type_and_id });
                 }
             }
             CloudModelEvent::ObjectTrashed { type_and_id, .. } => self
                 .searcher
                 .delete_searchable_object(type_and_id.uid(), type_and_id.object_type(), ctx)
                 .unwrap_or_else(|err| {
-                    log::error!("Error deleting object from search index: {err:?}");
+                    report_error!(err.context("Error deleting object from search index"));
                 }),
             CloudModelEvent::ObjectSynced {
                 type_and_id,
@@ -162,9 +166,8 @@ impl crate::search::mixer::SyncDataSource for DataSource {
                 self.searcher
                     .search_notebook(&query.text.to_lowercase(), app)
                     .map_err(|err| {
-                        Box::new(DataSourceSearchError {
-                            message: err.to_string(),
-                        }) as DataSourceRunErrorWrapper
+                        Box::new(DataSourceSearchError::new(err.to_string()))
+                            as DataSourceRunErrorWrapper
                     })?
                     .into_iter()
                     .map(QueryResult::from),
@@ -176,9 +179,8 @@ impl crate::search::mixer::SyncDataSource for DataSource {
                 self.searcher
                     .search_plans(&query.text.to_lowercase(), app)
                     .map_err(|err| {
-                        Box::new(DataSourceSearchError {
-                            message: err.to_string(),
-                        }) as DataSourceRunErrorWrapper
+                        Box::new(DataSourceSearchError::new(err.to_string()))
+                            as DataSourceRunErrorWrapper
                     })?
                     .into_iter()
                     .map(QueryResult::from),
@@ -201,9 +203,8 @@ impl crate::search::mixer::SyncDataSource for DataSource {
                     app,
                 )
                 .map_err(|err| {
-                    Box::new(DataSourceSearchError {
-                        message: err.to_string(),
-                    }) as DataSourceRunErrorWrapper
+                    Box::new(DataSourceSearchError::new(err.to_string()))
+                        as DataSourceRunErrorWrapper
                 })?
                 .into_iter()
                 .map(QueryResult::from),
@@ -217,9 +218,8 @@ impl crate::search::mixer::SyncDataSource for DataSource {
                 self.searcher
                     .search_env_var(&query.text.to_lowercase(), app)
                     .map_err(|err| {
-                        Box::new(DataSourceSearchError {
-                            message: err.to_string(),
-                        }) as DataSourceRunErrorWrapper
+                        Box::new(DataSourceSearchError::new(err.to_string()))
+                            as DataSourceRunErrorWrapper
                     })?
                     .into_iter()
                     .map(QueryResult::from),
@@ -541,11 +541,16 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
 mod full_text_searcher {
     use std::sync::Arc;
 
+    use fuzzy_match::FuzzyMatchResult;
+    use itertools::Itertools;
+    use warp_search_core::define_search_schema;
+    use warpui::r#async::executor::Background;
+    use warpui::{AppContext, SingletonEntity};
+
     use crate::cloud_object::model::persistence::CloudModel;
     use crate::cloud_object::{
         CloudObject, CloudObjectLocation, GenericStringObjectFormat, JsonObjectType, ObjectType,
     };
-    use crate::define_search_schema;
     use crate::drive::folders::CloudFolder;
     use crate::env_vars::CloudEnvVarCollection;
     use crate::notebooks::manager::NotebookManager;
@@ -562,10 +567,6 @@ mod full_text_searcher {
     use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
     use crate::server::ids::ObjectUid;
     use crate::workflows::CloudWorkflow;
-    use fuzzy_match::FuzzyMatchResult;
-    use itertools::Itertools;
-    use warpui::r#async::executor::Background;
-    use warpui::{AppContext, SingletonEntity};
 
     /// Memory budget for the search index of warp drive.
     /// Warp could potentially have a lot of objects, so we increase it from the default of 50MB to 100MB

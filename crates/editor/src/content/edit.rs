@@ -1,10 +1,8 @@
-use std::{
-    cell::Cell,
-    collections::HashMap,
-    mem,
-    ops::Range,
-    path::{Path, PathBuf},
-};
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::mem;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -12,41 +10,35 @@ use markdown_parser::{Hyperlink, TableAlignment};
 use num_traits::SaturatingSub;
 use rangemap::RangeSet;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
-use warp_core::{features::FeatureFlag, ui::theme::Fill as ThemeFill};
-use warpui::{
-    AppContext, SingletonEntity,
-    assets::asset_cache::{AssetCache, AssetSource, AssetState},
-    fonts::Weight,
-    image_cache::ImageType,
-    text::point::Point,
-    text_layout::{StyleAndFont, TextAlignment},
-    units::{IntoPixels, Pixels},
-};
+use warp_core::features::FeatureFlag;
+use warp_core::report_error;
+use warp_core::ui::theme::Fill as ThemeFill;
+use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui_core::fonts::Weight;
+use warpui_core::image_cache::ImageType;
+use warpui_core::text::char_slice;
+use warpui_core::text::point::Point;
+use warpui_core::text_layout::{StyleAndFont, TextAlignment};
+use warpui_core::units::{IntoPixels, Pixels};
+use warpui_core::{AppContext, SingletonEntity};
 
-use crate::{
-    parallel_util::Last,
-    render::{
-        TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO,
-        layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font},
-        model::{
-            BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
-            HiddenBlockConfig, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem,
-            LaidOutTable, LineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles,
-            RenderLayoutOptions, SelectableTextRun, TableBlockConfig, TableStyle,
-            gutter_expansion_button_types,
-        },
-    },
+use super::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
+use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
+use super::text::{
+    BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
 };
-use string_offset::{ByteOffset, CharOffset};
-use warpui::text::char_slice;
-
-use super::{
-    buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock},
-    mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout},
-    text::{BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache},
+use crate::parallel_util::Last;
+use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
+use crate::render::model::{
+    BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
+    HiddenBlockConfig, HorizontalRuleConfig, ImageBlockConfig, LaidOutEmbeddedItem, LaidOutTable,
+    LineCount, OffsetMap, Paragraph, ParagraphBlock, ParagraphStyles, RenderLayoutOptions,
+    SelectableTextRun, TableBlockConfig, TableStyle, gutter_expansion_button_types,
 };
+use crate::render::{TABLE_BASELINE_RATIO, TABLE_LINE_HEIGHT_RATIO};
 
 #[cfg(test)]
 #[path = "edit_tests.rs"]
@@ -75,6 +67,7 @@ pub(crate) fn layout_mermaid_block_for_test(
 ///
 /// Supports the following markdown image formats per the CommonMark spec:
 /// https://spec.commonmark.org/0.31.2/#images
+/// - Inline data: base64 `data:` URIs (e.g. notebook image outputs)
 /// - URLs: `http://` or `https://` prefixed paths
 /// - Absolute paths: paths starting with `/`
 /// - Relative paths: all other paths, resolved relative to the document location
@@ -85,11 +78,14 @@ pub fn resolve_asset_source_relative_to_directory(
     source: &str,
     base_directory: Option<&Path>,
 ) -> AssetSource {
-    if source.starts_with("http://") || source.starts_with("https://") {
+    if let Some(data_uri_source) = asset_cache::data_uri_source(source) {
+        data_uri_source
+    } else if source.starts_with("http://") || source.starts_with("https://") {
         asset_cache::url_source(source)
     } else if source.starts_with("/") {
         AssetSource::LocalFile {
             path: source.to_string(),
+            content_version: None,
         }
     } else {
         let resolved_path = if let Some(base_directory) = base_directory {
@@ -103,6 +99,7 @@ pub fn resolve_asset_source_relative_to_directory(
                 Ok(canon) => canon.to_string_lossy().to_string(),
                 Err(_) => resolved_path.to_string_lossy().to_string(),
             },
+            content_version: None,
         }
     }
 }
@@ -117,11 +114,14 @@ pub fn resolve_asset_source_relative_to_directory(
     source: &str,
     _base_directory: Option<&Path>,
 ) -> AssetSource {
-    if source.starts_with("http://") || source.starts_with("https://") {
+    if let Some(data_uri_source) = asset_cache::data_uri_source(source) {
+        data_uri_source
+    } else if source.starts_with("http://") || source.starts_with("https://") {
         asset_cache::url_source(source)
     } else {
         AssetSource::LocalFile {
             path: source.to_string(),
+            content_version: None,
         }
     }
 }
@@ -409,10 +409,12 @@ impl LayOutArgs {
                 .checked_sub(self.frame_offset_from_block_start)
             else {
                 // Autodetected URLs cannot cross frame boundaries.
-                log::error!(
-                    "URL starts at {} but frame starts at {}",
-                    index_range.start,
-                    self.frame_offset_from_block_start
+                report_error!(
+                    "URL start offset precedes frame start offset",
+                    extra: {
+                        "url_start" => %index_range.start,
+                        "frame_start" => %self.frame_offset_from_block_start
+                    }
                 );
                 continue;
             };
@@ -560,10 +562,9 @@ impl EditDelta {
                 match task.run(layout, location, is_hidden) {
                     Ok(result) => Some(result),
                     Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
+                        report_error!(
+                            e.context("Failed to lay out BlockItem"),
+                            extra: { "offset" => ?self.old_offset }
                         );
                         None
                     }
@@ -579,7 +580,7 @@ impl EditDelta {
                 if let (BlockItem::Hidden(running_config), BlockItem::Hidden(config)) =
                     (last, &item)
                 {
-                    *running_config += *config;
+                    *running_config += config.clone();
                     return acc;
                 }
             }
@@ -646,7 +647,7 @@ pub fn layout_temporary_blocks(
             match task.run(layout, location, false) {
                 Ok(result) => Some((line_count, result.0)),
                 Err(e) => {
-                    log::error!("Failed to lay out temporary blocks: {e:?}");
+                    report_error!(e.context("Failed to lay out temporary blocks"));
                     None
                 }
             }

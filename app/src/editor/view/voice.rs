@@ -1,7 +1,20 @@
-use super::{EditorAction, EditorView, VoiceTranscriptionOptions};
+use settings::Setting as _;
+use voice_input::{StartListeningError, VoiceInput, VoiceSessionResult};
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warpui::elements::{Container, CornerRadius, Icon, Radius};
+use warpui::platform::Cursor;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::ui_components::button::ButtonTooltipPosition;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::{elements, AppContext, Element, SingletonEntity, ViewContext, ViewHandle};
+
+use super::{EditorAction, EditorView, VoiceTranscriber, VoiceTranscriptionOptions};
 use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::editor::EditorElement;
+use crate::report_error;
 use crate::server::server_api::TranscribeError;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{AISettings, VoiceInputToggleKey};
@@ -11,21 +24,6 @@ use crate::ui_components::icons;
 use crate::view_components::{FeaturePopup, NewFeaturePopupLabel};
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use settings::Setting as _;
-use voice_input::{StartListeningError, VoiceInput, VoiceSessionResult};
-use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::elements;
-use warpui::elements::{Container, CornerRadius, Icon, Radius};
-use warpui::platform::Cursor;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::ui_components::button::ButtonTooltipPosition;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::ViewHandle;
-use warpui::{AppContext, Element, SingletonEntity, ViewContext};
-
-use super::VoiceTranscriber;
 
 const MICROPHONE_ACCESS_ERROR_ID: &str = "MICROPHONE_ACCESS_ERROR";
 const NUM_TIMES_TO_SHOW_VOICE_NEW_FEATURE_POPUP: usize = 4;
@@ -171,7 +169,7 @@ impl EditorView {
                 if cancel_transcription {
                     voice_input.abort_listening();
                 } else if let Err(e) = voice_input.stop_listening(ctx) {
-                    log::error!("Failed to stop voice input: {e:?}");
+                    report_error!(e.context("Failed to stop voice input"));
                 }
             });
         }
@@ -286,7 +284,8 @@ impl EditorView {
                                     Self::show_microphone_access_toast(ctx);
                                 }
                                 _ => {
-                                    log::error!("Failed to start voice input: {e:?}");
+                                    report_error!(anyhow::Error::new(e)
+                                        .context("Failed to start voice input"));
                                 }
                             }
                             ctx.notify();
@@ -503,7 +502,7 @@ impl EditorView {
                     self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx)
                 }
                 _ => {
-                    log::error!("Failed to transcribe voice input: {e:?}");
+                    report_error!(anyhow::Error::new(e).context("Failed to transcribe voice input"));
                     self.voice_error_toast(super::VOICE_ERROR_TOAST_TEXT, ctx)
                 }
             },
