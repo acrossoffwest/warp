@@ -99,19 +99,11 @@ use crate::util::openable_file_type::FileTarget;
 use crate::view_components::ToastFlavor;
 use crate::workflows::workflow::Workflow;
 
-
 use lazy_static::lazy_static;
 
-use session_sharing_protocol::common::{
-    };
 use warp_core::HostId;
 #[cfg(feature = "local_fs")]
-use warpui::elements::{
-    };
-
-use warpui::{
-    elements::{},
-    };
+use warpui::elements::{};
 
 use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
@@ -127,7 +119,7 @@ use crate::channel::{Channel, ChannelState};
 use crate::code::active_file::ActiveFileModel;
 use crate::code::buffer_location::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
-use crate::code::view::{CodeView};
+use crate::code::view::CodeView;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectArgs};
 use crate::features::FeatureFlag;
@@ -148,7 +140,7 @@ use crate::resource_center::{
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ObjectUid, SyncId};
-use crate::server::server_api::{ServerApi};
+use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
     AnonymousUserSignupEntrypoint, PaletteSource, SharingDialogSource, TelemetryEvent,
 };
@@ -176,10 +168,7 @@ use crate::terminal::shared_session::share_modal::{ShareSessionModal, ShareSessi
 use crate::terminal::shared_session::{
     self, IsSharedSessionCreator, SharedSessionActionSource, SharedSessionSource,
 };
-use crate::terminal::view::inline_banner::{
-    };
-use crate::terminal::view::load_ai_conversation::{
-    RestoreConversationEntryBehavior, };
+use crate::terminal::view::load_ai_conversation::RestoreConversationEntryBehavior;
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::view::{
     BlockNotification, ConversationRestorationInNewPaneType, ExecuteCommandEvent,
@@ -6745,15 +6734,14 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) -> PaneId {
         let focused_pane_id = self.focused_pane_id(ctx);
-        let (pane_data, _view) =
-            self.create_terminal_pane_data(
-                startup_directory,
-                HashMap::new(),
-                IsSharedSessionCreator::No,
-                None,
-                None,
-                ctx,
-            );
+        let (pane_data, _view) = self.create_terminal_pane_data(
+            startup_directory,
+            HashMap::new(),
+            IsSharedSessionCreator::No,
+            None,
+            None,
+            ctx,
+        );
         let new_pane_id = PaneId::from(pane_data.terminal_pane_id());
         let _ = self.add_pane(
             direction,

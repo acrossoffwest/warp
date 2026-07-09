@@ -83,13 +83,27 @@ pub unsafe fn from_native(
                 return None;
             };
 
+            let cmd = native_modifiers.contains(NSEventModifierFlags::Command);
+            // Command shortcuts must be layout-independent: on a cyrillic
+            // layout the Q key reports a cyrillic letter, which would never
+            // match a "cmd-q" binding even though AppKit menus fire for it.
+            // Mirror the menu behavior by falling back to the physical ANSI
+            // key name whenever cmd is held and the character is not ASCII.
+            let key: String = if cmd && unmodified_chars.chars().any(|c| !c.is_ascii()) {
+                ansi_key_name(native_event.keyCode())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| unmodified_chars.to_owned())
+            } else {
+                unmodified_chars.to_owned()
+            };
+
             let keystroke = Keystroke {
                 ctrl: native_modifiers.contains(NSEventModifierFlags::Control),
                 alt: native_modifiers.contains(NSEventModifierFlags::Option),
                 shift: native_modifiers.contains(NSEventModifierFlags::Shift),
-                cmd: native_modifiers.contains(NSEventModifierFlags::Command),
+                cmd,
                 meta: false, /* handled separately */
-                key: unmodified_chars.into(),
+                key,
             };
 
             let characters = native_event.characters();
@@ -247,5 +261,73 @@ pub unsafe fn from_native(
             modifiers,
         }),
         _ => None,
+    }
+}
+
+/// Physical ANSI name for a hardware key code (`kVK_ANSI_*`), independent of
+/// the active keyboard layout. Used to make cmd shortcuts work on non-latin
+/// layouts. Table matches Carbon's `Events.h`.
+fn ansi_key_name(key_code: u16) -> Option<&'static str> {
+    Some(match key_code {
+        0x00 => "a",
+        0x01 => "s",
+        0x02 => "d",
+        0x03 => "f",
+        0x04 => "h",
+        0x05 => "g",
+        0x06 => "z",
+        0x07 => "x",
+        0x08 => "c",
+        0x09 => "v",
+        0x0B => "b",
+        0x0C => "q",
+        0x0D => "w",
+        0x0E => "e",
+        0x0F => "r",
+        0x10 => "y",
+        0x11 => "t",
+        0x12 => "1",
+        0x13 => "2",
+        0x14 => "3",
+        0x15 => "4",
+        0x16 => "6",
+        0x17 => "5",
+        0x18 => "=",
+        0x19 => "9",
+        0x1A => "7",
+        0x1B => "-",
+        0x1C => "8",
+        0x1D => "0",
+        0x1E => "]",
+        0x1F => "o",
+        0x20 => "u",
+        0x21 => "[",
+        0x22 => "i",
+        0x23 => "p",
+        0x25 => "l",
+        0x26 => "j",
+        0x27 => "'",
+        0x28 => "k",
+        0x29 => ";",
+        0x2A => "\\",
+        0x2B => ",",
+        0x2C => "/",
+        0x2D => "n",
+        0x2E => "m",
+        0x2F => ".",
+        0x32 => "`",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod ansi_key_name_tests {
+    use super::ansi_key_name;
+
+    #[test]
+    fn maps_physical_letter_keys_layout_independently() {
+        assert_eq!(ansi_key_name(0x0C), Some("q")); // kVK_ANSI_Q
+        assert_eq!(ansi_key_name(0x0D), Some("w")); // kVK_ANSI_W
+        assert_eq!(ansi_key_name(0x35), None); // Escape: not an ANSI char key
     }
 }

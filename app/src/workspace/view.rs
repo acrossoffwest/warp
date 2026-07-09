@@ -210,17 +210,10 @@ use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
+use crate::ai::facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::AIRequestUsageModel;
-use crate::ai::{
-    agent::{},
-    blocklist::{
-        suggested_agent_mode_workflow_modal::{
-            },
-        },
-    facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent},
-};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::app_state::{
     LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot, NotebookPaneSnapshot,
@@ -297,15 +290,11 @@ use crate::BlocklistAIHistoryModel;
 use sentry::protocol::{Attachment, AttachmentType};
 use serde_json;
 
-use super::hoa_onboarding::{
-    };
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
 use crate::ai_assistant::{AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR};
-use crate::app_state::{
-    TabGroupSnapshot,
-    };
+use crate::app_state::TabGroupSnapshot;
 use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_override_warning_modal::{
@@ -388,8 +377,6 @@ use crate::autoupdate::{
     is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
 };
 use crate::banner::BannerState;
-use crate::billing::shared_objects_creation_denied_modal::{
-    };
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
 use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::model::persistence::CloudModel;
@@ -422,8 +409,9 @@ use crate::palette::PaletteMode;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
 use crate::pane_group::{
-    self, AnyPaneContent, CodeDiffPane, CodePane, CustomRouterEditorPane, Direction, NewTerminalOptions, PanesLayout,
-    TabBarHoverIndex, };
+    self, AnyPaneContent, CodeDiffPane, CodePane, CustomRouterEditorPane, Direction,
+    NewTerminalOptions, PanesLayout, TabBarHoverIndex,
+};
 use crate::persistence::ModelEvent;
 use crate::prompt::editor_modal::{
     EditorModal as PromptEditorModal, EditorModalEvent as PromptEditorModalEvent,
@@ -437,9 +425,7 @@ use crate::resource_center::{
 };
 use crate::reward_view::{RewardEvent, RewardKind, RewardView};
 use crate::root_view::{quake_mode_window_id, NewWorkspaceSource, OpenLaunchConfigArg};
-use crate::search::command_palette::view::{
-    Event as CommandPaletteEvent, View as CommandPalette,
-};
+use crate::search::command_palette::view::{Event as CommandPaletteEvent, View as CommandPalette};
 use crate::search::command_search::searcher::{
     AcceptedHistoryItem, AcceptedWorkflow, CommandSearchItemAction,
 };
@@ -461,17 +447,16 @@ use crate::server::telemetry::{
 };
 use crate::session_management::{SessionNavigationData, SessionSource, TabNavigationData};
 use crate::settings::{
-    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
-    ChangelogSettings, CursorBlink,
-    DebugSettings, FontSettings, GPUSettings, InputSettings,
-    MonospaceFontSize, PaneSettings, PrivacySettings, SelectionSettings, Settings, SshSettings,
-    ThemeSettings,
+    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
+    AppEditorSettings, BlockVisibilitySettings, ChangelogSettings, CursorBlink, DebugSettings,
+    FontSettings, GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
+    SelectionSettings, Settings, SshSettings, ThemeSettings,
 };
+use crate::settings_view::flags;
 use crate::settings_view::handoff_environment_creation_modal::{
     HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
 };
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
-use crate::settings_view::{flags};
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
@@ -542,43 +527,18 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::toast_stack::{
     ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
 };
-use crate::{
-    ai_assistant::{
-        panel::{},
-        },
-    settings,
-    ui_components::blended_colors,
-};
 use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
+use crate::{settings, ui_components::blended_colors};
 
 #[cfg(feature = "local_fs")]
 use std::time::Instant;
 #[cfg(target_os = "macos")]
-
 use warp_core::user_preferences::GetUserPreferences as _;
 #[cfg(target_family = "wasm")]
 use warpui::elements::Percentage;
-use warpui::elements::{
-    };
 
-use crate::{autoupdate};
+use crate::autoupdate;
 
-use crate::editor::{
-    };
-
-use super::action::{
-    };
-use super::close_session_confirmation_dialog::{
-    };
-use super::delete_conversation_confirmation_dialog::{
-    };
-use super::rewind_confirmation_dialog::{
-    };
-
-use super::tab_settings::{
-    };
-use super::util::{
-    };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
     RemoveTabConfigConfirmationDialog, RemoveTabConfigConfirmationEvent,
@@ -596,8 +556,7 @@ use crate::terminal::alt_screen_reporting::AltScreenReporting;
 #[cfg(target_os = "windows")]
 use crate::terminal::available_shells::AvailableShells;
 #[cfg(not(target_family = "wasm"))]
-use crate::terminal::enable_auto_reload_modal::{
-    };
+use crate::terminal::enable_auto_reload_modal::{};
 use crate::terminal::general_settings::GeneralSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
@@ -612,73 +571,45 @@ use crate::terminal::model::session::SessionId;
 use crate::terminal::resizable_data::{
     ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
 };
-use crate::terminal::session_settings::{
-    };
 use crate::terminal::shared_session::SharedSessionActionSource;
-use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::terminal::view::ambient_agent::{
-    };
+use crate::terminal::view::ambient_agent::{};
+use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(feature = "local_tty")]
-use crate::terminal::view::load_ai_conversation::{
-    RestoreConversationEntryBehavior, };
+use crate::terminal::view::load_ai_conversation::RestoreConversationEntryBehavior;
 use crate::terminal::view::ssh_file_upload::FileUploadId;
-use crate::terminal::view::{
-    LeftPanelTargetView,
-    };
-use crate::ui_components::{icons};
+use crate::terminal::view::LeftPanelTargetView;
+use crate::ui_components::icons;
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 #[cfg(feature = "local_fs")]
-use crate::user_config::{
-    };
-use crate::util::bindings::{
-    };
+use crate::user_config::{};
 #[cfg(feature = "local_fs")]
 #[cfg(feature = "local_fs")]
 #[cfg(feature = "local_fs")]
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{
-    resolve_file_target_to_open_in_warp, };
+use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 #[cfg(target_family = "wasm")]
 use crate::view_components::action_button::ActionButton;
-use crate::view_components::callout_bubble::{
-    };
-use crate::view_components::{
-    };
 #[cfg(target_family = "wasm")]
 use crate::wasm_nux_dialog::WasmNUXDialog;
-use crate::workflows::{
-    };
 #[cfg(target_os = "macos")]
 use crate::workspace::cross_window_tab_drag::{
     AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
 };
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
-use crate::workspace::toast_stack::{
-    };
 use crate::workspace::view::auto_handoff_sleep_modal::{
     AutoHandoffSleepModal, AutoHandoffSleepModalEvent,
 };
-use crate::workspace::view::build_plan_migration_modal::{
-    };
-use crate::workspace::view::cloud_agent_capacity_modal::{
-    };
 use crate::workspace::view::free_ai_removal_modal::{
     FreeAiRemovalModal, FreeAiRemovalModalEvent, FreeAiRemovalModalTelemetryEvent,
     FreeAiRemovalModalVariant,
 };
-use crate::workspace::view::left_panel::{
-    };
-use crate::workspace::view::openwarp_launch_modal::{
-    };
 use crate::workspace::view::orchestration_launch_modal::{
     OrchestrationLaunchModal, OrchestrationLaunchModalEvent,
 };
 use crate::workspaces::workspace::AdminEnablementSetting;
-use crate::{
-    report_error, TelemetryEvent,
-};
+use crate::{report_error, TelemetryEvent};
 
 /// The padding that should be applied to the workspace as a whole.
 pub const WORKSPACE_PADDING: f32 = 1.0;

@@ -17,10 +17,6 @@ use super::{
     handle_model_event, mark_session_memory_app_run_clean, read_sqlite_data, save_app_state,
     save_codebase_index_metadata, setup_database, start_session_memory_app_run, start_writer,
 };
-use crate::persistence::{
-    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
-    SessionMemoryStatus,
-};
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
     TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
@@ -29,6 +25,10 @@ use crate::cloud_object::{CloudObjectPermissions, Owner};
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::persistence::model::ObjectPermissions;
+use crate::persistence::{
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    SessionMemoryStatus,
+};
 use crate::persistence::{BlockCompleted, ModelEvent, PersistedDataScope, PersistenceScope};
 use crate::server::ids::ClientId;
 use crate::tab::SelectedTabColor;
@@ -1068,7 +1068,8 @@ fn session_memory_records_round_trip_and_lifecycle_events() {
     )
     .expect("session memory record should upsert");
 
-    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
+    let restored =
+        read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
     assert_eq!(restored.session_memory_records, vec![record.clone()]);
 
     handle_model_event(
@@ -1100,7 +1101,8 @@ fn session_memory_records_round_trip_and_lifecycle_events() {
     )
     .expect("session memory record should delete");
 
-    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
+    let restored =
+        read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
     assert!(restored.session_memory_records.is_empty());
 }
 
