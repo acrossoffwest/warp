@@ -46,8 +46,8 @@ use crate::ai::harness_availability::{
     HarnessAvailabilityEvent, HarnessAvailabilityModel, HarnessModelInfo,
 };
 use crate::ai::llms::{
-    dedupe_model_display_names, is_using_api_key_for_provider, LLMId, LLMInfo, LLMPreferences,
-    LLMPreferencesEvent, LLMSpec,
+    byo_key_source_for_model, dedupe_model_display_names, should_show_key_icon_for_model,
+    ByoKeySource, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, LLMSpec,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::generic_string_model::StringModel;
@@ -1092,9 +1092,11 @@ impl ProfileModelSelector {
                 right_side_fields: None,
             });
             for llm in &custom_choices {
-                let fields = MenuItemFields::new(llm.menu_display_name())
-                    .with_right_side_icon(Icon::Key)
+                let mut fields = MenuItemFields::new(llm.menu_display_name())
                     .with_on_select_action(ProfileModelSelectorAction::SelectModel(llm.id.clone()));
+                if should_show_key_icon_for_model(llm, ctx) {
+                    fields = fields.with_right_side_icon(Icon::Key);
+                }
                 items.push(MenuItem::Item(fields));
             }
         }
@@ -1952,7 +1954,11 @@ impl ProfileModelSelector {
         .finish()
     }
 
-    fn render_model_spec_api_key(&self, app: &AppContext) -> Box<dyn Element> {
+    fn render_model_spec_api_key(
+        &self,
+        byo_key_source: ByoKeySource,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
@@ -1971,7 +1977,7 @@ impl ProfileModelSelector {
                             .with_child(
                                 Container::new(
                                     Text::new(
-                                        "Billed to API".to_string(),
+                                        byo_key_source.inference_label().to_string(),
                                         appearance.ui_font_family(),
                                         14.,
                                     )
@@ -1980,7 +1986,13 @@ impl ProfileModelSelector {
                                 )
                                 .finish(),
                             )
-                            .with_child(ChildView::new(&self.manage_api_key_button).finish())
+                            .with_child(
+                                Container::new(
+                                    ChildView::new(&self.manage_api_key_button).finish(),
+                                )
+                                .with_margin_left(8.)
+                                .finish(),
+                            )
                             .finish(),
                     )
                     .finish(),
@@ -1995,7 +2007,7 @@ impl ProfileModelSelector {
     fn render_all_model_spec_values(
         &self,
         spec: &LLMSpec,
-        is_using_api_key: bool,
+        byo_key_source: Option<ByoKeySource>,
         bg_bar_color: ColorU,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -2008,8 +2020,8 @@ impl ProfileModelSelector {
             ),
             self.render_model_spec_value("Speed".to_string(), spec.speed, bg_bar_color, app),
         ];
-        if is_using_api_key {
-            spec_values.push(self.render_model_spec_api_key(app));
+        if let Some(byo_key_source) = byo_key_source {
+            spec_values.push(self.render_model_spec_api_key(byo_key_source, app));
         } else {
             spec_values.push(self.render_model_spec_value(
                 "Cost".to_string(),
@@ -2025,7 +2037,7 @@ impl ProfileModelSelector {
     fn render_model_spec(
         &self,
         spec: &LLMSpec,
-        is_using_api_key: bool,
+        byo_key_source: Option<ByoKeySource>,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
@@ -2037,7 +2049,7 @@ impl ProfileModelSelector {
         );
         let spec = self.render_all_model_spec_values(
             spec,
-            is_using_api_key,
+            byo_key_source,
             internal_colors::neutral_3(theme),
             app,
         );
@@ -2084,7 +2096,7 @@ impl ProfileModelSelector {
         let sidecar_menu = ChildView::new(&self.model_spec_sidecar.dropdown).finish();
         let spec_values = self.render_all_model_spec_values(
             &spec.clone().unwrap_or_default(),
-            false,
+            None,
             internal_colors::neutral_5(theme),
             app,
         );
@@ -2311,8 +2323,8 @@ impl View for ProfileModelSelector {
                         .cloned();
                     Some(self.render_sidecar_spec_panel(&kind, &sidecar_spec, app))
                 } else if let Some(spec) = info.spec.as_ref() {
-                    let is_using_api_key = is_using_api_key_for_provider(&info.provider, app);
-                    Some(self.render_model_spec(spec, is_using_api_key, app))
+                    let byo_key_source = byo_key_source_for_model(info, app);
+                    Some(self.render_model_spec(spec, byo_key_source, app))
                 } else {
                     None
                 };
