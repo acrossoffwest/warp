@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use super::types::{AgentPermissionMode, SessionMemoryRecord, SessionMemorySource};
+use super::types::{
+    user_command, AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+};
 use crate::terminal::CLIAgent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,18 +72,140 @@ pub enum RestoreError {
     UnsupportedSource,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupRestoreAction {
+    ExistingPane {
+        terminal_pane_uuid: Vec<u8>,
+        plan: RestorePlan,
+    },
+    AlreadyRestoredPane {
+        terminal_pane_uuid: Vec<u8>,
+    },
+    NewPane {
+        plan: RestorePlan,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredTerminalPane {
+    pub uuid: Vec<u8>,
+    pub cwd: Option<PathBuf>,
+}
+
+pub fn startup_restore_action_for_record(
+    record: &SessionMemoryRecord,
+    restored_terminal_panes: &[RestoredTerminalPane],
+    auto_run_restored_commands: bool,
+    layout_restore_enabled: bool,
+) -> Result<StartupRestoreAction, RestoreError> {
+    let plan = restore_plan_for_record(record, auto_run_restored_commands)?;
+
+    if let Some(terminal_pane_uuid) = &record.terminal_pane_uuid {
+        if restored_terminal_panes
+            .iter()
+            .any(|restored| restored.uuid == *terminal_pane_uuid)
+        {
+            return if should_apply_restore_plan_to_existing_pane(&plan) {
+                Ok(StartupRestoreAction::ExistingPane {
+                    terminal_pane_uuid: terminal_pane_uuid.clone(),
+                    plan,
+                })
+            } else {
+                Ok(StartupRestoreAction::AlreadyRestoredPane {
+                    terminal_pane_uuid: terminal_pane_uuid.clone(),
+                })
+            };
+        }
+
+        if layout_restore_enabled {
+            if let Some(restored) = restored_terminal_panes.iter().find(|restored| {
+                record.cwd.is_some() && restored.cwd.as_ref() == record.cwd.as_ref()
+            }) {
+                return if should_apply_restore_plan_to_existing_pane(&plan) {
+                    Ok(StartupRestoreAction::ExistingPane {
+                        terminal_pane_uuid: restored.uuid.clone(),
+                        plan,
+                    })
+                } else {
+                    Ok(StartupRestoreAction::AlreadyRestoredPane {
+                        terminal_pane_uuid: restored.uuid.clone(),
+                    })
+                };
+            }
+        }
+    }
+
+    Ok(StartupRestoreAction::NewPane { plan })
+}
+
+fn should_apply_restore_plan_to_existing_pane(plan: &RestorePlan) -> bool {
+    match plan {
+        RestorePlan::Agent { .. } => true,
+        RestorePlan::Terminal { auto_run, .. } => *auto_run,
+    }
+}
+
+pub fn restore_plan_for_record(
+    record: &SessionMemoryRecord,
+    auto_run_restored_commands: bool,
+) -> Result<RestorePlan, RestoreError> {
+    if matches!(
+        record.source,
+        SessionMemorySource::ClaudeCode | SessionMemorySource::Codex
+    ) && record.native_session_id.is_some()
+    {
+        return agent_restore_plan(record);
+    }
+
+    match record.kind {
+        SessionMemoryKind::Terminal => {
+            Ok(terminal_restore_plan(record, auto_run_restored_commands))
+        }
+        SessionMemoryKind::AgentChat => agent_restore_plan(record),
+    }
+}
+
 pub fn terminal_restore_plan(
     record: &SessionMemoryRecord,
     auto_run_restored_commands: bool,
 ) -> RestorePlan {
-    let command_for_composer = record.last_command.clone();
-    let auto_run = auto_run_restored_commands && command_for_composer.is_some();
+    let command_for_composer = user_command(record.last_command.as_deref());
+    let auto_run = command_for_composer
+        .as_deref()
+        .map(|command| auto_run_restored_commands || is_safe_tmux_restore_command(command))
+        .unwrap_or(false);
 
     RestorePlan::Terminal {
         cwd: record.cwd.clone(),
         command_for_composer,
         auto_run,
     }
+}
+
+fn is_safe_tmux_restore_command(command: &str) -> bool {
+    let mut tokens = command.split_whitespace();
+    let Some(command_token) = tokens.find(|token| !is_env_assignment(token)) else {
+        return false;
+    };
+    if command_token != "tmux" {
+        return false;
+    }
+
+    match tokens.next() {
+        None => true,
+        Some("a" | "attach" | "attach-session") => true,
+        Some("new" | "new-session") => tokens.any(|token| token == "-A" || token.contains('A')),
+        _ => false,
+    }
+}
+
+fn is_env_assignment(token: &str) -> bool {
+    token.split_once('=').map(|(name, _)| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    }) == Some(true)
 }
 
 pub fn agent_restore_plan(record: &SessionMemoryRecord) -> Result<RestorePlan, RestoreError> {

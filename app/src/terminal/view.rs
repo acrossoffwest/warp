@@ -2515,6 +2515,7 @@ pub struct TerminalView {
     /// `pane_tree_from_template_recursive` when a tab config has both
     /// commands and `PaneMode::Agent`.
     enter_agent_view_after_pending_commands: bool,
+    pending_session_memory_restore_command: Option<String>,
     slow_bootstrap_banner: ViewHandle<Banner<TerminalAction>>,
     is_slow_bootstrap_banner_open: bool,
 
@@ -4137,6 +4138,7 @@ impl TerminalView {
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
             enter_agent_view_after_pending_commands: false,
+            pending_session_memory_restore_command: None,
             slow_bootstrap_banner,
             is_slow_bootstrap_banner_open: false,
             incompatible_configuration_banner,
@@ -10591,6 +10593,21 @@ impl TerminalView {
                     // The auto-toggle flag is irrelevant here because the
                     // session is removed immediately afterwards.
                     self.close_cli_agent_rich_input(CLIAgentRichInputCloseReason::Other, ctx);
+                    // The agent process exited while the pane stays open: the
+                    // user ended the chat, so it must not be auto-restored on
+                    // the next startup. Pane close and app shutdown do not go
+                    // through this path.
+                    let ended_native_session_id = CLIAgentSessionsModel::as_ref(ctx)
+                        .session(self.view_id)
+                        .and_then(|session| session.session_context.session_id.clone());
+                    if let Some(native_session_id) = ended_native_session_id {
+                        crate::SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.mark_agent_session_ended_for_native_session_and_notify(
+                                &native_session_id,
+                                ctx,
+                            );
+                        });
+                    }
                     CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
                         sessions_model.remove_session(self.view_id, ctx);
                     });
@@ -11623,6 +11640,9 @@ impl TerminalView {
             }
             ModelEvent::BootstrapPrecmdDone => {
                 self.execute_pending_command((), ctx);
+                if let Some(command) = self.pending_session_memory_restore_command.take() {
+                    self.execute_command_or_set_pending(&command, ctx);
+                }
             }
             ModelEvent::AgentTaggedInChanged { is_tagged_in } => {
                 let state = if *is_tagged_in {
@@ -12265,6 +12285,13 @@ impl TerminalView {
         }
 
         self.is_login_shell_bootstrapped = true;
+        // Layout-restored panes never emit `BootstrapPrecmdDone` (their restored
+        // blocks make the bootstrap precmd send `AfterBlockCompleted` instead), so
+        // a deferred session-memory restore command must also be drained here.
+        if let Some(command) = self.pending_session_memory_restore_command.take() {
+            log::info!("Session memory restore: executing deferred command after shell bootstrap");
+            self.execute_command_or_set_pending(&command, ctx);
+        }
         self.hide_slow_bootstrap_banner(ctx);
 
         if self.auth_state.is_anonymous_or_logged_out()
@@ -14754,6 +14781,18 @@ impl TerminalView {
     pub fn execute_command_or_set_pending(&mut self, command: &str, ctx: &mut ViewContext<Self>) {
         self.set_pending_command(command, ctx);
         self.execute_pending_command((), ctx);
+    }
+
+    pub fn execute_command_when_bootstrapped_or_defer(
+        &mut self,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.is_login_shell_bootstrapped {
+            self.execute_command_or_set_pending(command, ctx);
+        } else {
+            self.pending_session_memory_restore_command = Some(command.to_string());
+        }
     }
 
     fn hide_slow_bootstrap_banner(&mut self, ctx: &mut ViewContext<Self>) {

@@ -864,6 +864,10 @@ pub struct NewServerExperiment {
 #[derive(Debug, Clone, PartialEq, Queryable, Selectable, Insertable, AsChangeset)]
 #[diesel(table_name = crate::schema::session_memory_records)]
 #[diesel(primary_key(id))]
+// Upserts always carry the full record, so `None` must overwrite a previously
+// set column (e.g. clear a stale `closed_intentionally_at` when a pane is
+// alive again) instead of diesel's default skip-`None` changeset behavior.
+#[diesel(treat_none_as_null = true)]
 pub struct SessionMemoryRecord {
     pub id: String,
     pub source: String,
@@ -886,7 +890,18 @@ pub struct SessionMemoryRecord {
     pub started_at: Option<i64>,
     pub completed_at: Option<i64>,
     pub closed_intentionally_at: Option<i64>,
+    pub app_run_id: Option<String>,
+    pub recovery_offered_run_id: Option<String>,
     pub restore_payload: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = crate::schema::session_memory_app_runs)]
+#[diesel(primary_key(run_id))]
+pub struct SessionMemoryAppRun {
+    pub run_id: String,
+    pub started_at: i64,
+    pub clean_shutdown_at: Option<i64>,
 }
 
 #[derive(Debug, Insertable)]

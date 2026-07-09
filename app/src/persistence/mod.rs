@@ -124,8 +124,8 @@ pub struct WriterHandles {
 }
 
 pub use crate::session_memory::types::{
-    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
-    SessionMemoryStatus,
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemoryRunState,
+    SessionMemorySource, SessionMemoryStatus,
 };
 
 /// Model for interacting with the writer thread.
@@ -213,6 +213,7 @@ pub struct PersistedData {
     pub mcp_servers_to_restore: Vec<Uuid>,
     #[allow(dead_code)]
     pub session_memory_records: Vec<SessionMemoryRecord>,
+    pub session_memory_run_state: SessionMemoryRunState,
 }
 
 #[derive(Clone, Debug)]

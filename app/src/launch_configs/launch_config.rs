@@ -155,6 +155,8 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 | LeafContents::ExecutionProfileEditor
                 | LeafContents::GetStarted
                 | LeafContents::NetworkLog
+                | LeafContents::SessionMemory
+                | LeafContents::SessionMemoryTranscript
                 | LeafContents::Welcome { .. }
                 | LeafContents::AIDocument(_)
                 | LeafContents::EnvironmentManagement(_)

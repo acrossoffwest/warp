@@ -572,7 +572,7 @@ fn resume_command_format() {
     );
     assert_eq!(
         CLIAgent::Codex.resume_command(id),
-        format!("codex --resume {id}")
+        format!("codex resume {id}")
     );
 }
 
@@ -583,7 +583,7 @@ fn codex_resume_preserves_dangerous_permission_mode() {
 
     assert_eq!(
         command,
-        "codex --resume abc123 --dangerously-bypass-approvals-and-sandbox"
+        "codex resume abc123 --dangerously-bypass-approvals-and-sandbox"
     );
 }
 
@@ -603,5 +603,5 @@ fn unknown_permission_mode_does_not_add_dangerous_flags() {
     let command = CLIAgent::Codex
         .resume_command_preserving_permission("abc123", AgentPermissionMode::Unknown);
 
-    assert_eq!(command, "codex --resume abc123");
+    assert_eq!(command, "codex resume abc123");
 }

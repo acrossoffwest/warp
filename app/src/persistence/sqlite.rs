@@ -51,8 +51,8 @@ use super::model::{
 use super::schema;
 use super::{
     AgentPermissionMode, BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData,
-    PersistenceScope, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
-    SessionMemoryStatus, StartedCommandMetadata, WriterHandles,
+    PersistenceScope, SessionMemoryKind, SessionMemoryRecord, SessionMemoryRunState,
+    SessionMemorySource, SessionMemoryStatus, StartedCommandMetadata, WriterHandles,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::scheduled::{
@@ -165,7 +165,19 @@ pub fn initialize(
     match init_db(&scope) {
         Ok(mut conn) => {
             let user_uid = AuthStateProvider::as_ref(ctx).get().user_id();
-            let app_state = match read_sqlite_data(&mut conn, user_uid) {
+            let session_memory_run_state = match start_session_memory_app_run(&mut conn) {
+                Ok(run_state) => run_state,
+                Err(err) => {
+                    report_error!(err.context("Failed to start session memory app run"));
+                    SessionMemoryRunState::test_default()
+                }
+            };
+
+            let app_state = match read_sqlite_data_with_session_memory_run_state(
+                &mut conn,
+                user_uid,
+                session_memory_run_state.clone(),
+            ) {
                 Ok(app_state) => Some(app_state),
                 Err(err) => {
                     send_telemetry_from_app_ctx!(
@@ -177,7 +189,11 @@ pub fn initialize(
                 }
             };
 
-            let writer_handles = match start_writer(conn, database_path.clone()) {
+            let writer_handles = match start_writer(
+                conn,
+                database_path.clone(),
+                Some(session_memory_run_state.current_run_id),
+            ) {
                 Ok(writer_handles) => Some(writer_handles),
                 Err(err) => {
                     send_telemetry_from_app_ctx!(
@@ -510,7 +526,11 @@ fn reconstruct_database(path: &Path) -> Result<SqliteConnection> {
     setup_database(path)
 }
 
-fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<WriterHandles> {
+fn start_writer(
+    conn: SqliteConnection,
+    database_path: PathBuf,
+    session_memory_run_id: Option<String>,
+) -> Result<WriterHandles> {
     let (tx, rx) = std::sync::mpsc::sync_channel(CHANNEL_SIZE);
     let mut current_conn = conn;
     let handle = thread::Builder::new()
@@ -561,6 +581,21 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             }
                         }
                         ModelEvent::Terminate => {
+                            if !paused {
+                                if let Some(run_id) = session_memory_run_id.as_deref() {
+                                    if let Err(err) = mark_session_memory_app_run_clean(
+                                        &mut current_conn,
+                                        run_id,
+                                        Utc::now().timestamp(),
+                                    ) {
+                                        report_db_error(
+                                            "marking session memory app run clean",
+                                            err,
+                                            &database_path,
+                                        );
+                                    }
+                                }
+                            }
                             log::info!("Shutting down SQLite writer thread");
                             return;
                         }
@@ -882,6 +917,52 @@ fn agent_permission_mode_from_db(permission_mode: &str) -> AgentPermissionMode {
     }
 }
 
+fn start_session_memory_app_run(conn: &mut SqliteConnection) -> Result<SessionMemoryRunState> {
+    let previous_run = schema::session_memory_app_runs::dsl::session_memory_app_runs
+        .order(schema::session_memory_app_runs::dsl::started_at.desc())
+        .first::<model::SessionMemoryAppRun>(conn)
+        .optional()?;
+
+    let current_run_id = Uuid::new_v4().to_string();
+    let started_at = Utc::now().timestamp();
+    let previous_run_id = previous_run.as_ref().map(|run| run.run_id.clone());
+    let recoverable_run_id = previous_run.as_ref().and_then(|run| {
+        if run.clean_shutdown_at.is_none() {
+            Some(run.run_id.clone())
+        } else {
+            None
+        }
+    });
+
+    diesel::insert_into(schema::session_memory_app_runs::dsl::session_memory_app_runs)
+        .values(&model::SessionMemoryAppRun {
+            run_id: current_run_id.clone(),
+            started_at,
+            clean_shutdown_at: None,
+        })
+        .execute(conn)?;
+
+    Ok(SessionMemoryRunState::with_previous_run(
+        current_run_id,
+        previous_run_id,
+        recoverable_run_id,
+    ))
+}
+
+fn mark_session_memory_app_run_clean(
+    conn: &mut SqliteConnection,
+    run_id: &str,
+    clean_shutdown_at: i64,
+) -> Result<()> {
+    diesel::update(
+        schema::session_memory_app_runs::dsl::session_memory_app_runs
+            .filter(schema::session_memory_app_runs::dsl::run_id.eq(run_id)),
+    )
+    .set(schema::session_memory_app_runs::dsl::clean_shutdown_at.eq(clean_shutdown_at))
+    .execute(conn)?;
+    Ok(())
+}
+
 fn session_memory_record_to_db(record: SessionMemoryRecord) -> Result<model::SessionMemoryRecord> {
     Ok(model::SessionMemoryRecord {
         id: record.id,
@@ -910,6 +991,8 @@ fn session_memory_record_to_db(record: SessionMemoryRecord) -> Result<model::Ses
         started_at: record.started_at,
         completed_at: record.completed_at,
         closed_intentionally_at: record.closed_intentionally_at,
+        app_run_id: record.app_run_id,
+        recovery_offered_run_id: record.recovery_offered_run_id,
         restore_payload: record
             .restore_payload
             .map(|payload| serde_json::to_string(&payload))
@@ -943,6 +1026,8 @@ fn session_memory_record_from_db(row: model::SessionMemoryRecord) -> Option<Sess
         started_at: row.started_at,
         completed_at: row.completed_at,
         closed_intentionally_at: row.closed_intentionally_at,
+        app_run_id: row.app_run_id,
+        recovery_offered_run_id: row.recovery_offered_run_id,
         restore_payload: row
             .restore_payload
             .as_deref()
@@ -1324,7 +1409,10 @@ fn save_pane_state(
         LeafContents::GetStarted => GET_STARTED_PANE_KIND,
         LeafContents::Welcome { .. } => WELCOME_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
-        LeafContents::EnvironmentManagement(_) | LeafContents::NetworkLog => {
+        LeafContents::EnvironmentManagement(_)
+        | LeafContents::NetworkLog
+        | LeafContents::SessionMemory
+        | LeafContents::SessionMemoryTranscript => {
             // These pane types are filtered out before this function is
             // called; see `LeafContents::is_persisted` and the skip in
             // `save_app_state`. Reaching this arm would mean a `pane_nodes`
@@ -1563,7 +1651,9 @@ fn save_pane_state(
                 .values(ambient_agent_pane)
                 .execute(conn)?;
         }
-        LeafContents::NetworkLog => {
+        LeafContents::NetworkLog
+        | LeafContents::SessionMemory
+        | LeafContents::SessionMemoryTranscript => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
     }
@@ -1892,7 +1982,9 @@ fn get_all_mcp_server_installations(
 
     let improper_rows = rows_len - result.len();
     if improper_rows > 0 {
-        log::warn!("Skipping {improper_rows} rows from mcp_server_installations table due to malformation.");
+        log::warn!(
+            "Skipping {improper_rows} rows from mcp_server_installations table due to malformation."
+        );
     }
 
     Ok(result)
@@ -2917,9 +3009,22 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
 /// happen is the user won't have session restoration.
 ///
 /// In the future, the awkwardness of the transaction interface is resolved in diesel 2.0.0.
+#[allow(dead_code)]
 fn read_sqlite_data(
     conn: &mut SqliteConnection,
     current_user_id: Option<UserUid>,
+) -> Result<PersistedData, Error> {
+    read_sqlite_data_with_session_memory_run_state(
+        conn,
+        current_user_id,
+        SessionMemoryRunState::test_default(),
+    )
+}
+
+fn read_sqlite_data_with_session_memory_run_state(
+    conn: &mut SqliteConnection,
+    current_user_id: Option<UserUid>,
+    session_memory_run_state: SessionMemoryRunState,
 ) -> Result<PersistedData, Error> {
     use schema::windows::dsl::*;
 
@@ -3522,6 +3627,7 @@ fn read_sqlite_data(
         mcp_server_installations,
         mcp_servers_to_restore,
         session_memory_records,
+        session_memory_run_state,
     })
 }
 

@@ -24,7 +24,8 @@ use crate::{
 
 use super::{
     app_database_file_path, database_file_path_for_scope, decode_path, deduplicate_events,
-    encode_path, handle_model_event, read_sqlite_data, save_app_state, setup_database,
+    encode_path, handle_model_event, mark_session_memory_app_run_clean, read_sqlite_data,
+    save_app_state, setup_database, start_session_memory_app_run,
 };
 
 #[test]
@@ -416,6 +417,8 @@ fn session_memory_records_round_trip_and_lifecycle_events() {
         started_at: Some(1200),
         completed_at: None,
         closed_intentionally_at: None,
+        app_run_id: Some("previous-run".to_string()),
+        recovery_offered_run_id: None,
         restore_payload: Some(serde_json::json!({
             "cwd": "/tmp/warp-session-memory-test",
             "resume_id": "abc123"
@@ -464,6 +467,102 @@ fn session_memory_records_round_trip_and_lifecycle_events() {
 
     let restored = read_sqlite_data(&mut conn, None).expect("app state should load");
     assert!(restored.session_memory_records.is_empty());
+}
+
+#[test]
+fn session_memory_record_upsert_clears_previously_set_optional_fields() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let mut record = SessionMemoryRecord {
+        id: "codex-abc123".to_string(),
+        source: SessionMemorySource::Codex,
+        kind: SessionMemoryKind::AgentChat,
+        status: SessionMemoryStatus::Live,
+        title: "Codex resume abc123".to_string(),
+        summary: None,
+        cwd: Some(PathBuf::from("/tmp/warp-session-memory-test")),
+        project: None,
+        native_session_id: Some("abc123".to_string()),
+        transcript_path: None,
+        terminal_pane_uuid: Some(vec![1, 2, 3, 4]),
+        app_window_fingerprint: None,
+        app_tab_fingerprint: None,
+        last_command: None,
+        last_exit_code: None,
+        launch_argv: None,
+        permission_mode: AgentPermissionMode::Dangerous,
+        last_seen_at: 1234,
+        started_at: None,
+        completed_at: None,
+        closed_intentionally_at: Some(1300),
+        app_run_id: Some("previous-run".to_string()),
+        recovery_offered_run_id: Some("previous-run".to_string()),
+        restore_payload: None,
+    };
+
+    handle_model_event(
+        ModelEvent::UpsertSessionMemoryRecord {
+            record: record.clone(),
+        },
+        &mut conn,
+    )
+    .expect("session memory record should upsert");
+
+    // The pane is alive again: a fresh upsert must clear the stale
+    // closed/offered markers, otherwise the record is misclassified as
+    // user-closed on the next startup and never auto-restored.
+    record.closed_intentionally_at = None;
+    record.recovery_offered_run_id = None;
+
+    handle_model_event(
+        ModelEvent::UpsertSessionMemoryRecord {
+            record: record.clone(),
+        },
+        &mut conn,
+    )
+    .expect("session memory record should upsert again");
+
+    let restored = read_sqlite_data(&mut conn, None)
+        .expect("app state should load")
+        .session_memory_records
+        .pop()
+        .expect("record should exist");
+    assert_eq!(restored.closed_intentionally_at, None);
+    assert_eq!(restored.recovery_offered_run_id, None);
+    assert_eq!(restored.status, SessionMemoryStatus::Live);
+}
+
+#[test]
+fn session_memory_app_run_tracks_recoverable_previous_run() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+
+    let first_run =
+        start_session_memory_app_run(&mut conn).expect("first session memory app run should start");
+    mark_session_memory_app_run_clean(&mut conn, &first_run.current_run_id, 100)
+        .expect("first run should be marked clean");
+
+    let second_run = start_session_memory_app_run(&mut conn)
+        .expect("second session memory app run should start");
+    assert_eq!(
+        second_run.previous_run_id.as_deref(),
+        Some(first_run.current_run_id.as_str())
+    );
+    assert_eq!(second_run.recoverable_run_id, None);
+
+    let third_run =
+        start_session_memory_app_run(&mut conn).expect("third session memory app run should start");
+    assert_eq!(
+        third_run.previous_run_id.as_deref(),
+        Some(second_run.current_run_id.as_str())
+    );
+    assert_eq!(
+        third_run.recoverable_run_id.as_deref(),
+        Some(second_run.current_run_id.as_str())
+    );
 }
 
 fn assert_encode_then_decode_preserves_original_path(original_path: PathBuf) {

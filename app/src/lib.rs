@@ -1210,6 +1210,7 @@ pub(crate) fn initialize_app(
         persisted_project_rules,
         persisted_ignored_suggestions,
         persisted_session_memory_records,
+        session_memory_run_state,
         persisted_mcp_server_installations,
         mcp_servers_to_restore,
     ) = sqlite_data
@@ -1232,6 +1233,7 @@ pub(crate) fn initialize_app(
                 sqlite_data.project_rules,
                 sqlite_data.ignored_suggestions,
                 sqlite_data.session_memory_records,
+                sqlite_data.session_memory_run_state,
                 sqlite_data.mcp_server_installations,
                 sqlite_data.mcp_servers_to_restore,
             )
@@ -1255,6 +1257,7 @@ pub(crate) fn initialize_app(
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                crate::session_memory::types::SessionMemoryRunState::test_default(),
                 Default::default(),
                 Default::default(),
             )
@@ -1550,9 +1553,10 @@ pub(crate) fn initialize_app(
     let session_memory_event_sink =
         SessionMemoryModel::persistence_event_sink(persistence_writer.sender());
     ctx.add_singleton_model(move |_| {
-        SessionMemoryModel::from_persisted_records(
+        SessionMemoryModel::from_persisted_records_with_run_state(
             persisted_session_memory_records,
             session_memory_event_sink,
+            session_memory_run_state,
         )
     });
 

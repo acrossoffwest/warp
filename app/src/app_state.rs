@@ -86,6 +86,24 @@ pub enum PaneNodeSnapshot {
 }
 
 impl PaneNodeSnapshot {
+    /// The persisted uuids of all terminal panes in this subtree, or `None`
+    /// if the subtree contains any non-terminal pane.
+    pub fn terminal_pane_uuids_if_all_terminal(&self) -> Option<Vec<Vec<u8>>> {
+        match self {
+            PaneNodeSnapshot::Leaf(leaf) => match &leaf.contents {
+                LeafContents::Terminal(snapshot) => Some(vec![snapshot.uuid.clone()]),
+                _ => None,
+            },
+            PaneNodeSnapshot::Branch(branch) => {
+                let mut uuids = Vec::new();
+                for (_, child) in &branch.children {
+                    uuids.extend(child.terminal_pane_uuids_if_all_terminal()?);
+                }
+                Some(uuids)
+            }
+        }
+    }
+
     pub fn has_horizontal_split(&self) -> bool {
         match self {
             PaneNodeSnapshot::Leaf(_) => false,
@@ -133,6 +151,12 @@ pub enum LeafContents {
     /// The in-app network log pane. Not persisted across restarts because the
     /// backing log is an in-memory ring buffer that starts empty on launch.
     NetworkLog,
+    /// Local session memory board. Not persisted as a pane because the board can be
+    /// reopened from the command palette and its data lives in the session memory registry.
+    SessionMemory,
+    /// Read-only transcript viewer opened from the local session memory board. Not
+    /// persisted because the source transcript path is owned by the session memory record.
+    SessionMemoryTranscript,
     /// An entrypoint pane type to launch other pane types from a search palette. The default view
     /// when creating a tab.
     Welcome {
@@ -159,6 +183,8 @@ impl LeafContents {
             // starts empty on launch; persisting would also regress back to
             // an on-disk log via the app-state database.
             LeafContents::NetworkLog
+            | LeafContents::SessionMemory
+            | LeafContents::SessionMemoryTranscript
             // Environment management panes are opened on-demand via workspace
             // actions and have no persistable state.
             | LeafContents::EnvironmentManagement(_) => false,

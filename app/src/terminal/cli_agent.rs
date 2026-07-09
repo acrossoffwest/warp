@@ -346,7 +346,7 @@ impl CLIAgent {
     pub fn resume_command(&self, session_id: &str) -> String {
         match self {
             CLIAgent::Claude => format!("claude --resume {session_id}"),
-            CLIAgent::Codex => format!("codex --resume {session_id}"),
+            CLIAgent::Codex => format!("codex resume {session_id}"),
             other => {
                 log::warn!("resume_command called on non-resumable agent {other:?}");
                 String::new()

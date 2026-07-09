@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
-use crate::session_memory::types::SessionMemoryRecord;
+use pathfinder_color::ColorU;
+use warpui::fonts::FamilyId;
+use warpui::ui_components::components::Coords;
+
+use crate::session_memory::types::{is_internal_warp_command, SessionMemoryRecord};
 
 use super::{
-    filter_rows, row_actions, rows_from_records, short_row_id, AgentPermissionMode, RowActionKind,
-    SessionMemoryBoardFilter, SessionMemoryBoardRow, SessionMemoryKind, SessionMemorySource,
-    SessionMemoryStatus,
+    command_preview, filter_rows, remove_row_by_id, row_actions, rows_from_records, short_row_id,
+    text_button_styles, AgentPermissionMode, RowActionKind, SessionMemoryBoardFilter,
+    SessionMemoryBoardRow, SessionMemoryKind, SessionMemorySource, SessionMemoryStatus,
 };
 
 fn terminal_row(id: &str, status: SessionMemoryStatus) -> SessionMemoryBoardRow {
@@ -96,6 +100,8 @@ fn persisted_record(
         started_at: Some(1_725_000_000),
         completed_at: None,
         closed_intentionally_at: None,
+        app_run_id: Some("previous-run".to_owned()),
+        recovery_offered_run_id: None,
         restore_payload: Some(serde_json::json!({ "pane": "left" })),
     }
 }
@@ -198,6 +204,54 @@ fn normal_rows_are_not_dangerous_badged() {
 }
 
 #[test]
+fn internal_warp_bootstrap_commands_are_hidden() {
+    let bootstrap = r#"unsetopt ZLE; WARP_SESSION_ID="$(command -p date +%s)$RANDOM"; read -r -d '' WARP_BOOTSTRAP_VAR <<'EOM'"#;
+
+    assert!(is_internal_warp_command(bootstrap));
+    assert_eq!(command_preview(Some(bootstrap)), None);
+}
+
+#[test]
+fn command_preview_is_single_line_and_truncated() {
+    let command =
+        "cargo test -p warp session_memory_board -- --nocapture\nsecond line that must not show";
+
+    assert_eq!(
+        command_preview(Some(command)).as_deref(),
+        Some("cargo test -p warp session_memory_board -- --nocapture")
+    );
+
+    let long = "x".repeat(180);
+    let preview = command_preview(Some(&long)).unwrap();
+    assert!(preview.len() <= 123);
+    assert!(preview.ends_with("..."));
+}
+
+#[test]
+fn button_interaction_styles_preserve_required_text_fields() {
+    let styles = text_button_styles(
+        FamilyId(42),
+        12.,
+        30.,
+        8.,
+        Coords::uniform(0.).left(11.).right(11.),
+        ColorU::new(10, 10, 10, 255),
+        ColorU::new(20, 20, 20, 255),
+        ColorU::new(30, 30, 30, 255),
+        ColorU::new(240, 240, 240, 255),
+        ColorU::new(230, 230, 230, 255),
+        ColorU::new(220, 220, 220, 255),
+    );
+
+    for style in [styles.0, styles.1, styles.2] {
+        assert_eq!(style.font_family_id, Some(FamilyId(42)));
+        assert_eq!(style.font_size, Some(12.));
+        assert_eq!(style.height, Some(30.));
+        assert!(style.padding.is_some());
+    }
+}
+
+#[test]
 fn query_matches_title_cwd_and_session_id() {
     let rows = test_rows();
 
@@ -246,6 +300,15 @@ fn agent_rows_offer_resume_split_transcript_and_delete_actions() {
             RowActionKind::Delete,
         ]
     );
+}
+
+#[test]
+fn delete_action_removes_row_from_board_immediately() {
+    let mut rows = test_rows();
+
+    assert!(remove_row_by_id(&mut rows, "codex-blocked"));
+    assert!(!rows.iter().any(|row| row.id == "codex-blocked"));
+    assert!(!remove_row_by_id(&mut rows, "codex-blocked"));
 }
 
 #[test]

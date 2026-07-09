@@ -12,6 +12,7 @@ pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod right_panel;
 pub(crate) mod session_memory_board;
+pub(crate) mod session_memory_transcript;
 mod startup_directory;
 #[cfg(test)]
 #[path = "view_tests.rs"]
@@ -153,6 +154,7 @@ use crate::workspace::view::openwarp_launch_modal::{
 use crate::workspace::view::session_memory_board::{
     rows_from_records, SessionMemoryBoard, SessionMemoryBoardAction,
 };
+use crate::workspace::view::session_memory_transcript::SessionMemoryTranscriptPaneInput;
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
 use crate::BlocklistAIHistoryModel;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -185,7 +187,7 @@ use crate::launch_configs::launch_config::WindowTemplate;
 use crate::pane_group::{
     AIFactPane, ChildAgentOrigin, CodeReviewPanelArg, Direction as PaneGroupDirection,
     EnvironmentManagementPane, ExecutionProfileEditorPane, NetworkLogPane, PaneGroup, PaneId,
-    TerminalPaneId,
+    SessionMemoryPane, SessionMemoryTranscriptPane, TerminalPaneId,
 };
 use crate::quit_warning::UnsavedStateSummary;
 use crate::search::command_palette::view::NavigationMode;
@@ -195,9 +197,12 @@ use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::auth::AuthClient;
 use crate::session_memory::model::SessionMemoryModel;
 use crate::session_memory::restore::{
-    agent_restore_plan, terminal_restore_plan, RestoreError, RestorePlan,
+    restore_plan_for_record, startup_restore_action_for_record, RestoreError, RestorePlan,
+    RestoredTerminalPane, StartupRestoreAction,
 };
-use crate::session_memory::types::{SessionMemoryRecord, SessionMemorySource};
+use crate::session_memory::types::{
+    user_command, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+};
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
     DefaultSessionMode, InputModeSettings,
@@ -3394,6 +3399,9 @@ impl Workspace {
             registry.register(window_id, weak_handle);
         });
 
+        ws.enrich_session_memory_records_from_agent_index(ctx);
+        ws.auto_restore_startup_session_memory(ctx);
+
         ws
     }
 
@@ -3764,39 +3772,62 @@ impl Workspace {
                 window_snapshot,
                 block_lists,
             } => {
-                let active_tab_index = window_snapshot.active_tab_index;
                 let restored_left_panel_open = window_snapshot.left_panel_open;
 
-                window_snapshot
-                    .tabs
+                // The window snapshot can be stale (crash / force-kill), while
+                // session memory close markers are written the moment a pane
+                // is closed. Skip tabs whose panes the user already closed.
+                let suppress_tab = {
+                    let session_memory = SessionMemoryModel::as_ref(ctx);
+                    window_snapshot
+                        .tabs
+                        .iter()
+                        .map(|saved_tab| {
+                            saved_tab
+                                .root
+                                .terminal_pane_uuids_if_all_terminal()
+                                .is_some_and(|uuids| {
+                                    session_memory.should_suppress_restored_tab(&uuids)
+                                })
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let active_tab_index = suppress_tab
                     .iter()
-                    .enumerate()
-                    .for_each(|(tab_index, saved_tab)| {
-                        let custom_title = saved_tab.custom_title.clone();
-                        self.add_tab_with_pane_layout(
-                            PanesLayout::Snapshot(Box::new(saved_tab.root.clone())),
-                            block_lists.clone(),
-                            custom_title,
-                            ctx,
+                    .take(window_snapshot.active_tab_index)
+                    .filter(|suppressed| !**suppressed)
+                    .count();
+
+                let mut tab_index = 0;
+                for (saved_tab, suppressed) in window_snapshot.tabs.iter().zip(&suppress_tab) {
+                    if *suppressed {
+                        log::info!(
+                            "Session memory: skipping restore of a tab whose panes were closed intentionally"
                         );
-                        self.tabs[tab_index].default_directory_color =
-                            saved_tab.default_directory_color;
-                        self.tabs[tab_index].selected_color = saved_tab.selected_color;
+                        continue;
+                    }
+                    let custom_title = saved_tab.custom_title.clone();
+                    self.add_tab_with_pane_layout(
+                        PanesLayout::Snapshot(Box::new(saved_tab.root.clone())),
+                        block_lists.clone(),
+                        custom_title,
+                        ctx,
+                    );
+                    self.tabs[tab_index].default_directory_color =
+                        saved_tab.default_directory_color;
+                    self.tabs[tab_index].selected_color = saved_tab.selected_color;
 
-                        let pane_group = self.tabs[tab_index].pane_group.clone();
+                    let pane_group = self.tabs[tab_index].pane_group.clone();
 
-                        if let Some(left_panel_snapshot) = &saved_tab.left_panel {
-                            self.restore_left_panel_for_tab(&pane_group, left_panel_snapshot, ctx);
-                        }
+                    if let Some(left_panel_snapshot) = &saved_tab.left_panel {
+                        self.restore_left_panel_for_tab(&pane_group, left_panel_snapshot, ctx);
+                    }
 
-                        if let Some(right_panel_snapshot) = &saved_tab.right_panel {
-                            self.restore_right_panel_for_tab(
-                                &pane_group,
-                                right_panel_snapshot,
-                                ctx,
-                            );
-                        }
-                    });
+                    if let Some(right_panel_snapshot) = &saved_tab.right_panel {
+                        self.restore_right_panel_for_tab(&pane_group, right_panel_snapshot, ctx);
+                    }
+                    tab_index += 1;
+                }
 
                 if self.tab_count() == 0 {
                     if self.should_trigger_get_started_onboarding(ctx) {
@@ -3817,7 +3848,10 @@ impl Workspace {
                     self.left_panel_open = restored_left_panel_open;
                 }
 
-                self.activate_tab_internal(active_tab_index, ctx);
+                self.activate_tab_internal(
+                    active_tab_index.min(self.tab_count().saturating_sub(1)),
+                    ctx,
+                );
                 self.check_and_trigger_onboarding(ctx);
                 self.maybe_auto_open_conversation_list(ctx);
             }
@@ -14111,6 +14145,9 @@ impl Workspace {
             pane_group::Event::OpenSettings(section) => {
                 self.show_settings_with_section(Some(*section), ctx);
             }
+            pane_group::Event::SessionMemoryBoardAction(action) => {
+                self.handle_session_memory_board_action(action, ctx);
+            }
             pane_group::Event::OpenAutoReloadModal { purchased_credits } => {
                 self.current_workspace_state
                     .is_enable_auto_reload_modal_open = true;
@@ -16590,22 +16627,175 @@ impl Workspace {
         self.show_settings_with_section(None, ctx);
     }
 
+    fn enrich_session_memory_records_from_agent_index(&mut self, ctx: &mut ViewContext<Self>) {
+        let enriched_records = SessionMemoryModel::as_ref(ctx)
+            .records()
+            .iter()
+            .filter_map(Self::enrich_session_memory_record_from_agent_index)
+            .collect::<Vec<_>>();
+
+        if enriched_records.is_empty() {
+            return;
+        }
+
+        SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| {
+            for record in enriched_records {
+                model.upsert_and_notify(record, ctx);
+            }
+        });
+    }
+
+    fn enrich_session_memory_record_from_agent_index(
+        record: &SessionMemoryRecord,
+    ) -> Option<SessionMemoryRecord> {
+        const MAX_AGENT_INDEX_MATCH_DRIFT_SECONDS: u64 = 48 * 60 * 60;
+
+        if record.kind != SessionMemoryKind::Terminal || record.native_session_id.is_some() {
+            return None;
+        }
+
+        let agent = match record.source {
+            SessionMemorySource::ClaudeCode => CLIAgent::Claude,
+            SessionMemorySource::Codex => CLIAgent::Codex,
+            SessionMemorySource::WarpTerminal => return None,
+        };
+        let cwd = record.cwd.as_ref()?;
+        let entry = crate::workspace::agent_session_reader::read_all_sessions(agent, cwd)
+            .into_iter()
+            .filter(|entry| {
+                entry.updated_at.abs_diff(record.last_seen_at)
+                    <= MAX_AGENT_INDEX_MATCH_DRIFT_SECONDS
+            })
+            .max_by_key(|entry| entry.updated_at)?;
+
+        let mut record = record.clone();
+        record.kind = SessionMemoryKind::AgentChat;
+        record.title = entry.title;
+        record.cwd = entry.cwd;
+        record.native_session_id = Some(entry.session_id);
+        record.transcript_path = entry.transcript_path;
+        record.launch_argv = entry.launch_argv;
+        Some(record)
+    }
+
+    fn auto_restore_startup_session_memory(&mut self, ctx: &mut ViewContext<Self>) {
+        let records = SessionMemoryModel::as_ref(ctx).startup_auto_restore_records();
+        if records.is_empty() {
+            return;
+        }
+
+        let layout_restore_enabled = *GeneralSettings::as_ref(ctx).restore_session;
+        let mut restored_terminal_panes = if layout_restore_enabled {
+            self.restored_terminal_pane_targets(ctx)
+        } else {
+            Vec::new()
+        };
+
+        let mut offered_ids = Vec::new();
+        for record in records {
+            let action = match startup_restore_action_for_record(
+                &record,
+                &restored_terminal_panes,
+                *AISettings::as_ref(ctx).session_memory_auto_run_restored_commands,
+                layout_restore_enabled,
+            ) {
+                Ok(action) => action,
+                Err(err) => {
+                    log::warn!(
+                        "Skipping startup session memory restore for {}: {}",
+                        record.id,
+                        Self::restore_error_message(err)
+                    );
+                    continue;
+                }
+            };
+
+            match action {
+                StartupRestoreAction::ExistingPane {
+                    terminal_pane_uuid,
+                    plan,
+                } => {
+                    log::info!(
+                        "Session memory startup restore: applying record {} to existing pane",
+                        record.id
+                    );
+                    offered_ids.push(record.id.clone());
+                    restored_terminal_panes.retain(|pane| pane.uuid != terminal_pane_uuid);
+                    if let Some(terminal_view) =
+                        self.terminal_view_for_session_uuid(&terminal_pane_uuid, ctx)
+                    {
+                        terminal_view.update(ctx, |terminal_view, ctx| {
+                            Self::apply_restore_plan_to_terminal(terminal_view, &plan, ctx);
+                        });
+                    } else {
+                        self.restore_session_memory_plan(&plan, false, ctx);
+                    }
+                }
+                StartupRestoreAction::AlreadyRestoredPane { terminal_pane_uuid } => {
+                    log::info!(
+                        "Session memory startup restore: record {} already restored by layout",
+                        record.id
+                    );
+                    offered_ids.push(record.id.clone());
+                    restored_terminal_panes.retain(|pane| pane.uuid != terminal_pane_uuid);
+                }
+                StartupRestoreAction::NewPane { plan } => {
+                    log::info!(
+                        "Session memory startup restore: opening new pane for record {}",
+                        record.id
+                    );
+                    if self.restore_session_memory_plan(&plan, false, ctx) {
+                        offered_ids.push(record.id.clone());
+                    }
+                }
+            }
+        }
+
+        if !offered_ids.is_empty() {
+            SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.mark_startup_recovery_offered_and_notify(&offered_ids, ctx);
+            });
+        }
+    }
+
+    fn restored_terminal_pane_targets(&self, ctx: &AppContext) -> Vec<RestoredTerminalPane> {
+        self.tabs
+            .iter()
+            .flat_map(|tab| {
+                tab.pane_group
+                    .as_ref(ctx)
+                    .restored_terminal_pane_targets(ctx)
+            })
+            .collect()
+    }
+
+    fn terminal_view_for_session_uuid(
+        &self,
+        uuid: &[u8],
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        self.tabs.iter().find_map(|tab| {
+            tab.pane_group
+                .as_ref(ctx)
+                .terminal_view_for_session_uuid(uuid, ctx)
+        })
+    }
+
     fn open_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
         self.close_palette(false, Some("workspace:show_session_memory"), ctx);
         self.close_all_overlays(ctx);
+        self.enrich_session_memory_records_from_agent_index(ctx);
 
-        let rows = rows_from_records(SessionMemoryModel::as_ref(ctx).records());
         if let Some(board) = &self.session_memory_board {
+            let rows = rows_from_records(SessionMemoryModel::as_ref(ctx).records());
             board.update(ctx, |board, ctx| board.set_rows(rows, ctx));
             ctx.focus(board);
             ctx.notify();
             return;
         }
 
-        let board = ctx.add_typed_action_view(|_| SessionMemoryBoard::new(rows));
-        ctx.subscribe_to_view(&board, |me, _, event, ctx| {
-            me.handle_session_memory_board_action(event, ctx);
-        });
+        let pane = SessionMemoryPane::new(ctx);
+        let board = pane.board_view(ctx);
 
         ctx.subscribe_to_model(&SessionMemoryModel::handle(ctx), |me, _, _event, ctx| {
             if let Some(board) = &me.session_memory_board {
@@ -16614,9 +16804,13 @@ impl Workspace {
             }
         });
 
-        ctx.focus(&board);
         self.session_memory_board = Some(board);
-        ctx.notify();
+        let new_tab_placement_setting = TabSettings::as_ref(ctx).new_tab_placement;
+        let new_idx = match new_tab_placement_setting {
+            NewTabPlacement::AfterAllTabs => self.tab_count(),
+            NewTabPlacement::AfterCurrentTab => self.active_tab_index + 1,
+        };
+        self.add_tab_from_existing_pane(Box::new(pane), new_idx, ctx);
     }
 
     fn close_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
@@ -16670,15 +16864,10 @@ impl Workspace {
             return;
         };
 
-        let plan = match record.source {
-            SessionMemorySource::WarpTerminal => Ok(terminal_restore_plan(
-                &record,
-                *AISettings::as_ref(ctx).session_memory_auto_run_restored_commands,
-            )),
-            SessionMemorySource::ClaudeCode | SessionMemorySource::Codex => {
-                agent_restore_plan(&record)
-            }
-        };
+        let plan = restore_plan_for_record(
+            &record,
+            *AISettings::as_ref(ctx).session_memory_auto_run_restored_commands,
+        );
 
         let plan = match plan {
             Ok(plan) => plan,
@@ -16688,16 +16877,29 @@ impl Workspace {
             }
         };
 
-        let Some(terminal_view) = self.open_terminal_for_restore_plan(&plan, in_split, ctx) else {
+        if !self.restore_session_memory_plan(&plan, in_split, ctx) {
             self.show_session_memory_toast("Could not open a terminal for restore.", ctx);
             return;
+        }
+
+        self.close_session_memory_board(ctx);
+    }
+
+    fn restore_session_memory_plan(
+        &mut self,
+        plan: &RestorePlan,
+        in_split: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(terminal_view) = self.open_terminal_for_restore_plan(plan, in_split, ctx) else {
+            return false;
         };
 
         terminal_view.update(ctx, |terminal_view, ctx| {
-            Self::apply_restore_plan_to_terminal(terminal_view, &plan, ctx);
+            Self::apply_restore_plan_to_terminal(terminal_view, plan, ctx);
         });
 
-        self.close_session_memory_board(ctx);
+        true
     }
 
     fn open_terminal_for_restore_plan(
@@ -16748,14 +16950,14 @@ impl Workspace {
             } => {
                 if let Some(command) = command_for_composer {
                     if *auto_run {
-                        terminal_view.execute_command_or_set_pending(command, ctx);
+                        terminal_view.execute_command_when_bootstrapped_or_defer(command, ctx);
                     } else {
                         terminal_view.set_pending_command(command, ctx);
                     }
                 }
             }
             RestorePlan::Agent { command, .. } => {
-                terminal_view.execute_command_or_set_pending(command, ctx);
+                terminal_view.execute_command_when_bootstrapped_or_defer(command, ctx);
             }
         }
     }
@@ -16766,7 +16968,7 @@ impl Workspace {
             return;
         };
 
-        let Some(command) = record.last_command else {
+        let Some(command) = user_command(record.last_command.as_deref()) else {
             self.show_session_memory_toast("No last command was captured for this session.", ctx);
             return;
         };
@@ -16781,17 +16983,34 @@ impl Workspace {
             return;
         };
 
-        let Some(path) = record.transcript_path else {
+        let Some(path) = record.transcript_path.clone() else {
             self.show_session_memory_toast("No transcript was captured for this session.", ctx);
             return;
         };
 
-        ctx.open_file_path(&path);
-        self.close_session_memory_board(ctx);
+        let pane = SessionMemoryTranscriptPane::new(
+            SessionMemoryTranscriptPaneInput {
+                record_id: record.id,
+                title: record.title,
+                source: record.source,
+                path,
+            },
+            ctx,
+        );
+
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group.add_pane_with_direction(PaneGroupDirection::Right, pane, true, ctx);
+        });
     }
 
     fn delete_session_memory_record(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
-        SessionMemoryModel::handle(ctx).update(ctx, |model, _| model.delete(id));
+        SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| model.delete_and_notify(id, ctx));
+
+        if let Some(board) = &self.session_memory_board {
+            let rows = rows_from_records(SessionMemoryModel::as_ref(ctx).records());
+            board.update(ctx, |board, ctx| board.set_rows(rows, ctx));
+        }
+
         ctx.notify();
     }
 
@@ -24294,17 +24513,6 @@ impl View for Workspace {
 
         if let Some(lightbox_view) = &self.lightbox_view {
             stack.add_child(ChildView::new(lightbox_view).finish());
-        }
-
-        if let Some(board) = &self.session_memory_board {
-            stack.add_child(
-                Dismiss::new(Align::new(ChildView::new(board).finish()).finish())
-                    .prevent_interaction_with_other_elements()
-                    .on_dismiss(|ctx, _| {
-                        ctx.dispatch_typed_action(WorkspaceAction::CloseSessionMemoryBoard);
-                    })
-                    .finish(),
-            );
         }
 
         if FeatureFlag::CreatingSharedSessions.is_enabled()

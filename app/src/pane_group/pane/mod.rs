@@ -23,6 +23,8 @@ pub(super) mod get_started_view;
 pub(super) mod local_harness_launch;
 pub(super) mod network_log_pane;
 pub(super) mod notebook_pane;
+pub(super) mod session_memory_pane;
+pub(super) mod session_memory_transcript_pane;
 pub(super) mod settings_pane;
 pub(super) mod terminal_pane;
 pub mod view;
@@ -52,6 +54,10 @@ use crate::{
     settings_view::{environments_page::EnvironmentsPageView, SettingsView},
     terminal::{available_shells::AvailableShell, TerminalView},
     workflows::workflow_view::WorkflowView,
+    workspace::view::{
+        session_memory_board::SessionMemoryBoard,
+        session_memory_transcript::SessionMemoryTranscriptView,
+    },
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -150,6 +156,8 @@ pub(crate) enum IPaneType {
     ExecutionProfileEditor,
     GetStarted,
     NetworkLog,
+    SessionMemory,
+    SessionMemoryTranscript,
     Welcome,
     DeferredPlaceholder,
     /// A pane type only for tests.
@@ -174,6 +182,8 @@ impl Display for IPaneType {
             IPaneType::ExecutionProfileEditor => write!(f, "Execution Profile Editor"),
             IPaneType::GetStarted => write!(f, "GetStarted"),
             IPaneType::NetworkLog => write!(f, "Network Log"),
+            IPaneType::SessionMemory => write!(f, "Session Memory"),
+            IPaneType::SessionMemoryTranscript => write!(f, "Session Memory Transcript"),
             IPaneType::Welcome => write!(f, "Welcome"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
@@ -276,6 +286,18 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::NetworkLog, ctx)
     }
 
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<SessionMemoryBoard>>`].
+    pub fn from_session_memory_pane_ctx(ctx: &ViewContext<PaneView<SessionMemoryBoard>>) -> Self {
+        Self::new_from_ctx(IPaneType::SessionMemory, ctx)
+    }
+
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<SessionMemoryTranscriptView>>`].
+    pub fn from_session_memory_transcript_pane_ctx(
+        ctx: &ViewContext<PaneView<SessionMemoryTranscriptView>>,
+    ) -> Self {
+        Self::new_from_ctx(IPaneType::SessionMemoryTranscript, ctx)
+    }
+
     /// Creates a [`PaneId`] from a [`PaneView<TerminalView>`] entity ID.
     pub fn from_terminal_pane_view(
         terminal_pane_view: &ViewHandle<terminal_pane::TerminalPaneView>,
@@ -375,6 +397,23 @@ impl PaneId {
         network_log_pane_view: &ViewHandle<PaneView<NetworkLogView>>,
     ) -> Self {
         Self::new(IPaneType::NetworkLog, network_log_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<SessionMemoryBoard>`] entity ID.
+    pub fn from_session_memory_pane_view(
+        session_memory_pane_view: &ViewHandle<PaneView<SessionMemoryBoard>>,
+    ) -> Self {
+        Self::new(IPaneType::SessionMemory, session_memory_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<SessionMemoryTranscriptView>`] entity ID.
+    pub fn from_session_memory_transcript_pane_view(
+        session_memory_transcript_pane_view: &ViewHandle<PaneView<SessionMemoryTranscriptView>>,
+    ) -> Self {
+        Self::new(
+            IPaneType::SessionMemoryTranscript,
+            session_memory_transcript_pane_view,
+        )
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -491,6 +530,13 @@ impl PaneId {
             }
             IPaneType::NetworkLog => {
                 ChildView::<PaneView<NetworkLogView>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::SessionMemory => {
+                ChildView::<PaneView<SessionMemoryBoard>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::SessionMemoryTranscript => {
+                ChildView::<PaneView<SessionMemoryTranscriptView>>::with_id(self.0.pane_view_id)
+                    .finish()
             }
             IPaneType::Welcome => {
                 ChildView::<PaneView<WelcomeView>>::with_id(self.0.pane_view_id).finish()

@@ -3,25 +3,89 @@ use std::path::PathBuf;
 use pathfinder_color::ColorU;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex,
-    FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-    Text,
+    Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, Element, Fill as ElementFill, Flex, FormattedTextElement,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Text,
 };
-use warpui::fonts::Weight;
+use warpui::fonts::{FamilyId, Weight};
 use warpui::ui_components::button::Button;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
-use crate::session_memory::types::SessionMemoryRecord;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::{view, BackingView, PaneConfiguration, PaneEvent};
 pub use crate::session_memory::types::{
-    AgentPermissionMode, SessionMemoryKind, SessionMemorySource, SessionMemoryStatus,
+    command_preview, AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord,
+    SessionMemorySource, SessionMemoryStatus,
 };
 use crate::ui_components::blended_colors;
 
-const BOARD_WIDTH: f32 = 920.;
 const FILTER_BUTTON_HEIGHT: f32 = 30.;
 const ACTION_BUTTON_HEIGHT: f32 = 28.;
+
+fn text_button_style(
+    font_family_id: FamilyId,
+    font_size: f32,
+    height: f32,
+    border_radius: f32,
+    padding: Coords,
+    background: ColorU,
+    text_color: ColorU,
+) -> UiComponentStyles {
+    UiComponentStyles::default()
+        .set_height(height)
+        .set_background(ThemeFill::Solid(background).into())
+        .set_border_radius(CornerRadius::with_all(Radius::Pixels(border_radius)))
+        .set_font_color(text_color)
+        .set_font_size(font_size)
+        .set_font_family_id(font_family_id)
+        .set_padding(padding)
+}
+
+fn text_button_styles(
+    font_family_id: FamilyId,
+    font_size: f32,
+    height: f32,
+    border_radius: f32,
+    padding: Coords,
+    background: ColorU,
+    hover_background: ColorU,
+    clicked_background: ColorU,
+    text_color: ColorU,
+    hover_text_color: ColorU,
+    clicked_text_color: ColorU,
+) -> (UiComponentStyles, UiComponentStyles, UiComponentStyles) {
+    (
+        text_button_style(
+            font_family_id,
+            font_size,
+            height,
+            border_radius,
+            padding,
+            background,
+            text_color,
+        ),
+        text_button_style(
+            font_family_id,
+            font_size,
+            height,
+            border_radius,
+            padding,
+            hover_background,
+            hover_text_color,
+        ),
+        text_button_style(
+            font_family_id,
+            font_size,
+            height,
+            border_radius,
+            padding,
+            clicked_background,
+            clicked_text_color,
+        ),
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionMemoryBoardFilter {
@@ -62,6 +126,12 @@ pub enum SessionMemoryBoardAction {
     CopyLastCommand(String),
     OpenTranscript(String),
     Delete(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionMemoryBoardEvent {
+    Action(SessionMemoryBoardAction),
+    Pane(PaneEvent),
 }
 
 impl SessionMemorySource {
@@ -118,7 +188,7 @@ impl SessionMemoryBoardRow {
     }
 
     fn detail_label(&self) -> String {
-        if let Some(last_command) = &self.last_command {
+        if let Some(last_command) = command_preview(self.last_command.as_deref()) {
             return format!("last: {last_command}");
         }
 
@@ -246,12 +316,15 @@ pub struct SessionMemoryBoard {
     rows: Vec<SessionMemoryBoardRow>,
     active_filter: SessionMemoryBoardFilter,
     search_query: String,
+    pane_configuration: warpui::ModelHandle<PaneConfiguration>,
+    focus_handle: Option<PaneFocusHandle>,
+    scroll_state: ClippedScrollStateHandle,
     filter_mouse_states: FilterMouseStateHandles,
     row_mouse_states: Vec<RowMouseStateHandles>,
 }
 
 impl SessionMemoryBoard {
-    pub fn new(rows: Vec<SessionMemoryBoardRow>) -> Self {
+    pub fn new(rows: Vec<SessionMemoryBoardRow>, ctx: &mut ViewContext<Self>) -> Self {
         let row_mouse_states = rows
             .iter()
             .map(|_| RowMouseStateHandles::default())
@@ -261,9 +334,16 @@ impl SessionMemoryBoard {
             rows,
             active_filter: SessionMemoryBoardFilter::All,
             search_query: String::new(),
+            pane_configuration: ctx.add_model(|_| PaneConfiguration::new("Session Memory")),
+            focus_handle: None,
+            scroll_state: Default::default(),
             filter_mouse_states: FilterMouseStateHandles::default(),
             row_mouse_states,
         }
+    }
+
+    pub fn pane_configuration(&self) -> warpui::ModelHandle<PaneConfiguration> {
+        self.pane_configuration.clone()
     }
 
     pub fn set_filter(&mut self, filter: SessionMemoryBoardFilter, ctx: &mut ViewContext<Self>) {
@@ -280,6 +360,17 @@ impl SessionMemoryBoard {
             .collect();
         self.rows = rows;
         ctx.notify();
+    }
+
+    pub fn remove_row(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        if remove_row_by_id(&mut self.rows, id) {
+            self.row_mouse_states = self
+                .rows
+                .iter()
+                .map(|_| RowMouseStateHandles::default())
+                .collect();
+            ctx.notify();
+        }
     }
 
     pub fn visible_rows(&self) -> Vec<SessionMemoryBoardRow> {
@@ -317,12 +408,13 @@ impl SessionMemoryBoard {
 
     fn render_banner(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let theme = appearance.theme();
         let interrupted_count = self
             .rows
             .iter()
             .filter(|row| row.status == SessionMemoryStatus::Interrupted)
             .count();
+        let banner_title = ColorU::new(76, 45, 9, 255);
+        let banner_body = ColorU::new(122, 77, 18, 255);
 
         Container::new(
             Flex::row()
@@ -335,20 +427,20 @@ impl SessionMemoryBoard {
                         .with_child(Self::render_heading(
                             format!("{interrupted_count} interrupted sessions found"),
                             14.,
-                            blended_colors::text_main(theme, blended_colors::neutral_2(theme)),
+                            banner_title,
                             appearance,
                         ))
                         .with_child(Self::render_text(
                             "Commands were not run automatically. Choose a restore action when ready.",
                             12.,
-                            blended_colors::text_sub(theme, blended_colors::neutral_2(theme)),
+                            banner_body,
                             appearance,
                         ))
                         .finish(),
                 )
                 .with_child(Self::render_badge(
                     "Startup recovery",
-                    ColorU::new(122, 77, 18, 255),
+                    banner_body,
                     ColorU::new(255, 241, 214, 255),
                     appearance,
                 ))
@@ -382,40 +474,34 @@ impl SessionMemoryBoard {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let is_active = self.active_filter == filter;
-        let background = if is_active {
-            ThemeFill::Solid(blended_colors::neutral_4(theme))
-        } else {
-            ThemeFill::Solid(blended_colors::neutral_2(theme))
-        };
-        let hover_background = ThemeFill::Solid(blended_colors::neutral_3(theme));
         let text_color = if is_active {
             blended_colors::text_main(theme, blended_colors::neutral_4(theme))
         } else {
             blended_colors::text_sub(theme, blended_colors::neutral_2(theme))
         };
+        let (base_style, hover_style, clicked_style) = text_button_styles(
+            appearance.ui_font_family(),
+            12.,
+            FILTER_BUTTON_HEIGHT,
+            8.,
+            Coords::uniform(0.).left(11.).right(11.),
+            if is_active {
+                blended_colors::neutral_4(theme)
+            } else {
+                blended_colors::neutral_2(theme)
+            },
+            blended_colors::neutral_3(theme),
+            blended_colors::neutral_4(theme),
+            text_color,
+            blended_colors::text_main(theme, blended_colors::neutral_3(theme)),
+            blended_colors::text_main(theme, blended_colors::neutral_4(theme)),
+        );
 
         Button::new(
             self.filter_mouse_states.handle_for(filter),
-            UiComponentStyles::default()
-                .set_height(FILTER_BUTTON_HEIGHT)
-                .set_background(background.into())
-                .set_border_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                .set_font_color(text_color)
-                .set_font_size(12.)
-                .set_font_family_id(appearance.ui_font_family())
-                .set_padding(Coords::uniform(0.).left(11.).right(11.)),
-            Some(
-                UiComponentStyles::default()
-                    .set_background(hover_background.into())
-                    .set_font_color(blended_colors::text_main(
-                        theme,
-                        blended_colors::neutral_3(theme),
-                    )),
-            ),
-            Some(
-                UiComponentStyles::default()
-                    .set_background(ThemeFill::Solid(blended_colors::neutral_4(theme)).into()),
-            ),
+            base_style,
+            Some(hover_style),
+            Some(clicked_style),
             None,
         )
         .with_text_label(filter.label().to_owned())
@@ -433,7 +519,9 @@ impl SessionMemoryBoard {
             return self.render_empty_state(app);
         }
 
-        let mut rows = Flex::column().with_spacing(10.);
+        let mut rows = Flex::column()
+            .with_spacing(10.)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         for row in visible_rows {
             if let Some(row_index) = self
@@ -510,37 +598,41 @@ impl SessionMemoryBoard {
                         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                         .with_cross_axis_alignment(CrossAxisAlignment::Start)
                         .with_child(
-                            Flex::column()
-                                .with_spacing(5.)
-                                .with_child(badges.finish())
-                                .with_child(Self::render_heading(
-                                    row.title.clone(),
-                                    14.,
-                                    blended_colors::text_main(
-                                        theme,
-                                        blended_colors::neutral_1(theme),
-                                    ),
-                                    appearance,
-                                ))
-                                .with_child(Self::render_text(
-                                    row.location_label(),
-                                    12.,
-                                    blended_colors::text_sub(
-                                        theme,
-                                        blended_colors::neutral_1(theme),
-                                    ),
-                                    appearance,
-                                ))
-                                .with_child(Self::render_text(
-                                    row.detail_label(),
-                                    12.,
-                                    blended_colors::text_sub(
-                                        theme,
-                                        blended_colors::neutral_1(theme),
-                                    ),
-                                    appearance,
-                                ))
-                                .finish(),
+                            ConstrainedBox::new(
+                                Flex::column()
+                                    .with_spacing(5.)
+                                    .with_child(badges.finish())
+                                    .with_child(Self::render_heading(
+                                        row.title.clone(),
+                                        14.,
+                                        blended_colors::text_main(
+                                            theme,
+                                            blended_colors::neutral_1(theme),
+                                        ),
+                                        appearance,
+                                    ))
+                                    .with_child(Self::render_text(
+                                        row.location_label(),
+                                        12.,
+                                        blended_colors::text_sub(
+                                            theme,
+                                            blended_colors::neutral_1(theme),
+                                        ),
+                                        appearance,
+                                    ))
+                                    .with_child(Self::render_text(
+                                        row.detail_label(),
+                                        12.,
+                                        blended_colors::text_sub(
+                                            theme,
+                                            blended_colors::neutral_1(theme),
+                                        ),
+                                        appearance,
+                                    ))
+                                    .finish(),
+                            )
+                            .with_width(700.)
+                            .finish(),
                         )
                         .with_child(Self::render_text(
                             short_row_id(&row.id),
@@ -612,25 +704,25 @@ impl SessionMemoryBoard {
                 blended_colors::text_main(theme, blended_colors::neutral_2(theme)),
             )
         };
+        let (base_style, hover_style, clicked_style) = text_button_styles(
+            appearance.ui_font_family(),
+            12.,
+            ACTION_BUTTON_HEIGHT,
+            7.,
+            Coords::uniform(0.).left(10.).right(10.),
+            background,
+            hover_background,
+            hover_background,
+            text_color,
+            text_color,
+            text_color,
+        );
 
         Button::new(
             mouse_state,
-            UiComponentStyles::default()
-                .set_height(ACTION_BUTTON_HEIGHT)
-                .set_background(ThemeFill::Solid(background).into())
-                .set_border_radius(CornerRadius::with_all(Radius::Pixels(7.)))
-                .set_font_color(text_color)
-                .set_font_size(12.)
-                .set_font_family_id(appearance.ui_font_family())
-                .set_padding(Coords::uniform(0.).left(10.).right(10.)),
-            Some(
-                UiComponentStyles::default()
-                    .set_background(ThemeFill::Solid(hover_background).into()),
-            ),
-            Some(
-                UiComponentStyles::default()
-                    .set_background(ThemeFill::Solid(hover_background).into()),
-            ),
+            base_style,
+            Some(hover_style),
+            Some(clicked_style),
             None,
         )
         .with_text_label(label.to_owned())
@@ -661,7 +753,7 @@ impl SessionMemoryBoard {
 }
 
 impl Entity for SessionMemoryBoard {
-    type Event = SessionMemoryBoardAction;
+    type Event = SessionMemoryBoardEvent;
 }
 
 impl View for SessionMemoryBoard {
@@ -673,8 +765,7 @@ impl View for SessionMemoryBoard {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let mut content = Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
+        let mut header = Flex::column()
             .with_spacing(14.)
             .with_child(Self::render_heading(
                 "Session Memory",
@@ -684,22 +775,66 @@ impl View for SessionMemoryBoard {
             ));
 
         if self.has_interrupted_rows() {
-            content.add_child(self.render_banner(app));
+            header.add_child(self.render_banner(app));
         }
 
-        content.add_child(self.render_filter_tabs(app));
-        content.add_child(self.render_rows(app));
+        header.add_child(self.render_filter_tabs(app));
 
-        ConstrainedBox::new(
-            Container::new(content.finish())
-                .with_background(ThemeFill::Solid(blended_colors::neutral_1(theme)))
-                .with_border(Border::all(1.).with_border_color(blended_colors::neutral_3(theme)))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                .with_uniform_padding(18.)
+        let scrollable = ClippedScrollable::vertical(
+            self.scroll_state.clone(),
+            self.render_rows(app),
+            ScrollbarWidth::Custom(4.),
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
+
+        Container::new(
+            Flex::column()
+                .with_spacing(14.)
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(header.finish())
+                .with_child(warpui::elements::Shrinkable::new(1., scrollable).finish())
                 .finish(),
         )
-        .with_width(BOARD_WIDTH)
+        .with_background(ThemeFill::Solid(blended_colors::neutral_1(theme)))
+        .with_uniform_padding(18.)
         .finish()
+    }
+}
+
+impl BackingView for SessionMemoryBoard {
+    type PaneHeaderOverflowMenuAction = ();
+    type CustomAction = ();
+    type AssociatedData = ();
+
+    fn handle_pane_header_overflow_menu_action(
+        &mut self,
+        _action: &Self::PaneHeaderOverflowMenuAction,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+    }
+
+    fn close(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(SessionMemoryBoardEvent::Pane(PaneEvent::Close));
+    }
+
+    fn focus_contents(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.focus_self();
+    }
+
+    fn render_header_content(
+        &self,
+        _ctx: &view::HeaderRenderContext<'_>,
+        _app: &AppContext,
+    ) -> view::HeaderContent {
+        view::HeaderContent::simple("Session Memory")
+    }
+
+    fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
+        self.focus_handle = Some(focus_handle);
     }
 }
 
@@ -709,7 +844,13 @@ impl TypedActionView for SessionMemoryBoard {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             SessionMemoryBoardUiAction::SetFilter(filter) => self.set_filter(*filter, ctx),
-            SessionMemoryBoardUiAction::Emit(action) => ctx.emit(action.clone()),
+            SessionMemoryBoardUiAction::Emit(action) => {
+                if let SessionMemoryBoardAction::Delete(id) = action {
+                    self.remove_row(id, ctx);
+                }
+
+                ctx.emit(SessionMemoryBoardEvent::Action(action.clone()))
+            }
         }
     }
 }
@@ -718,6 +859,12 @@ impl TypedActionView for SessionMemoryBoard {
 pub enum SessionMemoryBoardUiAction {
     SetFilter(SessionMemoryBoardFilter),
     Emit(SessionMemoryBoardAction),
+}
+
+fn remove_row_by_id(rows: &mut Vec<SessionMemoryBoardRow>, id: &str) -> bool {
+    let old_len = rows.len();
+    rows.retain(|row| row.id != id);
+    rows.len() != old_len
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

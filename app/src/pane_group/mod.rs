@@ -36,6 +36,7 @@ use crate::quit_warning::UnsavedStateSummary;
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
+use crate::session_memory::restore::RestoredTerminalPane;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::SettingsSection;
 use crate::shell_indicator::ShellIndicatorType;
@@ -152,6 +153,7 @@ use crate::terminal::view::{
 use crate::terminal::{
     MockTerminalManager, ShareBlockModal, ShareBlockModalEvent, ShellLaunchData, ShellLaunchState,
 };
+use crate::workspace::view::session_memory_board::SessionMemoryBoardAction;
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 use session_sharing_protocol::sharer::SessionSourceType;
 use settings::Setting as _;
@@ -194,6 +196,8 @@ pub use pane::execution_profile_editor_pane::ExecutionProfileEditorPane;
 pub use pane::file_pane::FilePane;
 pub use pane::network_log_pane::NetworkLogPane;
 pub use pane::notebook_pane::NotebookPane;
+pub use pane::session_memory_pane::SessionMemoryPane;
+pub use pane::session_memory_transcript_pane::SessionMemoryTranscriptPane;
 pub use pane::settings_pane::SettingsPane;
 pub use pane::terminal_pane::TerminalPane;
 pub use pane::workflow_pane::WorkflowPane;
@@ -692,6 +696,7 @@ pub enum Event {
     },
     OpenAddRulePane,
     OpenEnvironmentManagementPane,
+    SessionMemoryBoardAction(SessionMemoryBoardAction),
     OpenFilesPalette {
         source: PaletteSource,
     },
@@ -1109,6 +1114,49 @@ impl PaneGroup {
             } else {
                 None
             }
+        })
+    }
+
+    pub fn terminal_pane_session_uuids(&self) -> Vec<Vec<u8>> {
+        self.pane_contents
+            .values()
+            .filter_map(|contents| {
+                contents
+                    .as_any()
+                    .downcast_ref::<TerminalPane>()
+                    .map(|pane| pane.session_uuid())
+            })
+            .collect()
+    }
+
+    pub fn restored_terminal_pane_targets(&self, ctx: &AppContext) -> Vec<RestoredTerminalPane> {
+        self.pane_contents
+            .values()
+            .filter_map(|contents| {
+                let pane = contents.as_any().downcast_ref::<TerminalPane>()?;
+                let terminal_view = pane.terminal_view(ctx);
+                Some(RestoredTerminalPane {
+                    uuid: pane.session_uuid(),
+                    // At startup the restored shell has not bootstrapped yet, so
+                    // the live pwd is unknown; fall back to the snapshot cwd.
+                    cwd: terminal_view
+                        .as_ref(ctx)
+                        .pwd_if_local(ctx)
+                        .map(PathBuf::from)
+                        .or_else(|| pane.restored_cwd()),
+                })
+            })
+            .collect()
+    }
+
+    pub fn terminal_view_for_session_uuid(
+        &self,
+        uuid: &[u8],
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        self.pane_contents.values().find_map(|contents| {
+            let pane = contents.as_any().downcast_ref::<TerminalPane>()?;
+            (pane.session_uuid().as_slice() == uuid).then(|| pane.terminal_view(ctx))
         })
     }
 
@@ -1595,6 +1643,7 @@ impl PaneGroup {
                     .cwd
                     .map(PathBuf::from)
                     .filter(|path| path.is_dir());
+                let restored_cwd = startup_directory.clone();
 
                 // Filter conversation IDs to only include those that have task messages
                 // and are not entirely passive (ignored suggestions).
@@ -1646,13 +1695,14 @@ impl PaneGroup {
 
                 let terminal_view_id = terminal_view.id();
 
-                let pane_data = TerminalPane::new(
+                let mut pane_data = TerminalPane::new(
                     uuid.0,
                     terminal_manager,
                     terminal_view,
                     model_event_sender,
                     ctx,
                 );
+                pane_data.set_restored_cwd(restored_cwd);
 
                 let terminal_pane_id = pane_data.terminal_pane_id();
                 let pane_id = terminal_pane_id.into();
@@ -1915,7 +1965,9 @@ impl PaneGroup {
                     "Can't restore execution profile editor panes"
                 ))
             }
-            LeafContents::NetworkLog => {
+            LeafContents::NetworkLog
+            | LeafContents::SessionMemory
+            | LeafContents::SessionMemoryTranscript => {
                 // Network log panes are intentionally not restored. Two
                 // reasons:
                 //
@@ -1932,7 +1984,7 @@ impl PaneGroup {
                 // programmer error on the persistence side. Users reopen the
                 // pane on demand via Privacy settings or the keybinding.
                 Err(anyhow::anyhow!(
-                    "Network log pane should not have been persisted, as it cannot be restored"
+                    "Non-persisted pane should not have been persisted, as it cannot be restored"
                 ))
             }
             LeafContents::GetStarted => {

@@ -395,6 +395,43 @@ fn session_start_sets_plugin_version() {
 }
 
 #[test]
+fn session_context_captures_transcript_path() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+    };
+
+    let event = CLIAgentEvent {
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::PromptSubmit,
+        session_id: Some("abc".to_owned()),
+        cwd: Some("/tmp".to_owned()),
+        project: Some("proj".to_owned()),
+        payload: CLIAgentEventPayload {
+            transcript_path: Some("/tmp/claude-session.jsonl".to_owned()),
+            query: Some("resume this".to_owned()),
+            ..Default::default()
+        },
+    };
+
+    session.apply_event(&event);
+
+    assert_eq!(
+        session.session_context.transcript_path.as_deref(),
+        Some("/tmp/claude-session.jsonl")
+    );
+}
+
+#[test]
 fn session_start_without_plugin_version_leaves_none() {
     let mut session = CLIAgentSession {
         agent: CLIAgent::Claude,

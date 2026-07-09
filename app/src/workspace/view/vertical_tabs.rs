@@ -3251,6 +3251,8 @@ impl PaneGroup {
             IPaneType::ExecutionProfileEditor => TypedPane::ExecutionProfileEditor,
             IPaneType::GetStarted
             | IPaneType::NetworkLog
+            | IPaneType::SessionMemory
+            | IPaneType::SessionMemoryTranscript
             | IPaneType::Welcome
             | IPaneType::DeferredPlaceholder => TypedPane::Other,
             #[cfg(test)]

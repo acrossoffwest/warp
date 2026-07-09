@@ -347,6 +347,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    session_memory_app_runs (run_id) {
+        run_id -> Text,
+        started_at -> BigInt,
+        clean_shutdown_at -> Nullable<BigInt>,
+    }
+}
+
+diesel::table! {
     session_memory_records (id) {
         id -> Text,
         source -> Text,
@@ -369,6 +377,8 @@ diesel::table! {
         started_at -> Nullable<BigInt>,
         completed_at -> Nullable<BigInt>,
         closed_intentionally_at -> Nullable<BigInt>,
+        app_run_id -> Nullable<Text>,
+        recovery_offered_run_id -> Nullable<Text>,
         restore_payload -> Nullable<Text>,
     }
 }
