@@ -182,6 +182,13 @@ impl CLIAgent {
         }
     }
 
+    /// Build a resume command preserving a previously captured dangerous
+    /// permission flag. This is the temporary bool-based bridge used until the
+    /// shared session-memory permission enum is available in this worktree.
+    pub fn resume_command_preserving_dangerous(&self, session_id: &str, dangerous: bool) -> String {
+        self.resume_command_with_flags(session_id, dangerous)
+    }
+
     pub fn command_prefix(&self) -> &'static str {
         match self {
             CLIAgent::Claude => "claude",
