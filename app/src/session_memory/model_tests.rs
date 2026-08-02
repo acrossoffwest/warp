@@ -1,0 +1,120 @@
+use std::path::PathBuf;
+
+use super::model::SessionMemoryModel;
+use super::types::{
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    SessionMemoryStatus,
+};
+
+#[test]
+fn startup_live_without_intentional_close_becomes_interrupted() {
+    let mut record = test_record("terminal-1");
+    record.status = SessionMemoryStatus::Live;
+    record.closed_intentionally_at = None;
+
+    let model = SessionMemoryModel::new(vec![record], None);
+
+    assert_eq!(model.records()[0].status, SessionMemoryStatus::Interrupted);
+    assert!(model.records()[0].is_interrupted());
+}
+
+#[test]
+fn startup_live_with_intentional_close_becomes_user_closed() {
+    let mut record = test_record("terminal-1");
+    record.status = SessionMemoryStatus::Live;
+    record.closed_intentionally_at = Some(100);
+
+    let model = SessionMemoryModel::new(vec![record], None);
+
+    assert_eq!(model.records()[0].status, SessionMemoryStatus::UserClosed);
+}
+
+#[test]
+fn filter_matches_title_cwd_command_and_session_id() {
+    let mut record = test_record("codex-1");
+    record.title = "Codex board spec".to_string();
+    record.cwd = Some(PathBuf::from("/home/user/projects/warp"));
+    record.last_command = Some("cargo check -p warp".to_string());
+    record.native_session_id = Some("abc123".to_string());
+
+    assert!(record.matches_query("board"));
+    assert!(record.matches_query("projects/warp"));
+    assert!(record.matches_query("cargo check"));
+    assert!(record.matches_query("abc123"));
+    assert!(record.matches_query(" CODEX "));
+    assert!(!record.matches_query("not-present"));
+}
+
+#[test]
+fn filtered_records_uses_record_query_matching() {
+    let mut board_record = test_record("codex-1");
+    board_record.title = "Codex board spec".to_string();
+    let mut other_record = test_record("terminal-1");
+    other_record.title = "Shell build".to_string();
+    let model = SessionMemoryModel::new(vec![board_record, other_record], None);
+
+    let matches = model.filtered_records("board");
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].id, "codex-1");
+}
+
+#[test]
+fn interrupted_records_returns_only_interrupted_sessions() {
+    let mut interrupted_record = test_record("terminal-1");
+    interrupted_record.status = SessionMemoryStatus::Live;
+    interrupted_record.closed_intentionally_at = None;
+    let mut closed_record = test_record("terminal-2");
+    closed_record.status = SessionMemoryStatus::Live;
+    closed_record.closed_intentionally_at = Some(100);
+    let model = SessionMemoryModel::new(vec![interrupted_record, closed_record], None);
+
+    let interrupted = model.interrupted_records();
+
+    assert_eq!(interrupted.len(), 1);
+    assert_eq!(interrupted[0].id, "terminal-1");
+}
+
+#[test]
+fn upsert_replaces_existing_record_and_delete_removes_by_id() {
+    let record = test_record("codex-1");
+    let mut model = SessionMemoryModel::new(vec![record], None);
+    let mut replacement = test_record("codex-1");
+    replacement.title = "Updated title".to_string();
+
+    model.upsert(replacement);
+
+    assert_eq!(model.records().len(), 1);
+    assert_eq!(model.records()[0].title, "Updated title");
+
+    model.delete("codex-1");
+
+    assert!(model.records().is_empty());
+}
+
+fn test_record(id: &str) -> SessionMemoryRecord {
+    SessionMemoryRecord {
+        id: id.to_string(),
+        source: SessionMemorySource::Codex,
+        kind: SessionMemoryKind::AgentChat,
+        status: SessionMemoryStatus::Unknown,
+        title: "Test session".to_string(),
+        summary: Some("A test session summary".to_string()),
+        cwd: Some(PathBuf::from("/tmp/session-memory")),
+        project: Some("warp".to_string()),
+        native_session_id: None,
+        transcript_path: None,
+        terminal_pane_uuid: None,
+        app_window_fingerprint: None,
+        app_tab_fingerprint: None,
+        last_command: None,
+        last_exit_code: None,
+        launch_argv: Some(vec!["codex".to_string()]),
+        permission_mode: AgentPermissionMode::Normal,
+        last_seen_at: 1,
+        started_at: Some(1),
+        completed_at: None,
+        closed_intentionally_at: None,
+        restore_payload: None,
+    }
+}

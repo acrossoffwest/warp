@@ -574,3 +574,30 @@ fn resume_command_format() {
         format!("codex --resume {id}")
     );
 }
+
+#[test]
+fn codex_resume_preserves_dangerous_permission_bool() {
+    let command = CLIAgent::Codex.resume_command_preserving_dangerous("abc123", true);
+
+    assert_eq!(
+        command,
+        "codex --resume abc123 --dangerously-bypass-approvals-and-sandbox"
+    );
+}
+
+#[test]
+fn claude_resume_preserves_dangerous_permission_bool() {
+    let command = CLIAgent::Claude.resume_command_preserving_dangerous("abc123", true);
+
+    assert_eq!(
+        command,
+        "claude --resume abc123 --dangerously-skip-permissions"
+    );
+}
+
+#[test]
+fn resume_preserving_dangerous_false_does_not_add_dangerous_flags() {
+    let command = CLIAgent::Codex.resume_command_preserving_dangerous("abc123", false);
+
+    assert_eq!(command, "codex --resume abc123");
+}
