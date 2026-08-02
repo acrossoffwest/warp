@@ -190,6 +190,7 @@ pub enum WorkspaceAction {
         keybinding_name: Option<String>,
     },
     ShowSettings,
+    ShowSessionMemory,
     ShowSettingsPage(SettingsSection),
     ShowSettingsPageWithSearch {
         search_query: String,
@@ -795,6 +796,7 @@ impl WorkspaceAction {
             | ConfigureKeybindingSettings { .. }
             | ExportAllWarpDriveObjects
             | ShowSettings
+            | ShowSessionMemory
             | ShowSettingsPage(_)
             | ShowSettingsPageWithSearch { .. }
             | ShowThemeChooser(_)

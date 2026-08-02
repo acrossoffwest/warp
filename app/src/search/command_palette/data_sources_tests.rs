@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use settings::manager::SettingsManager;
+use warpui::keymap::DescriptionContext;
 use warpui::{App, SingletonEntity};
 
 use super::*;
@@ -28,6 +29,7 @@ use crate::{
     },
     system::SystemStats,
     workflows::WorkflowId,
+    workspace::WorkspaceAction,
     workspaces::{
         team_tester::TeamTesterStatus, user_profiles::UserProfiles, user_workspaces::UserWorkspaces,
     },
@@ -112,6 +114,30 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.update(crate::settings::init_and_register_user_preferences);
     app.update(AISettings::register_and_subscribe_to_events);
+}
+
+#[test]
+fn test_show_session_memory_binding_is_registered_for_command_palette() {
+    App::test((), |mut app| async move {
+        app.update(crate::workspace::register_session_memory_bindings);
+
+        app.update(|ctx| {
+            let binding = ctx
+                .get_binding_by_name("workspace:show_session_memory")
+                .expect("show session memory binding should be registered");
+
+            assert_eq!(
+                "Show Session Memory",
+                binding
+                    .description
+                    .expect("show session memory binding should have a description")
+                    .in_context(DescriptionContext::Default)
+            );
+
+            let action = binding.action.as_any().downcast_ref::<WorkspaceAction>();
+            assert!(matches!(action, Some(WorkspaceAction::ShowSessionMemory)));
+        });
+    });
 }
 
 #[test]

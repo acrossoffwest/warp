@@ -73,13 +73,9 @@ impl RemoteControlHost {
         pane_id: crate::pane_group::PaneId,
         label: Option<String>,
     ) -> String {
-        if let Some((id, binding)) = self
-            .remote_panes
-            .iter_mut()
-            .find(|(_, binding)| {
-                binding.pane_group_id == pane_group_id && binding.pane_id == pane_id
-            })
-        {
+        if let Some((id, binding)) = self.remote_panes.iter_mut().find(|(_, binding)| {
+            binding.pane_group_id == pane_group_id && binding.pane_id == pane_id
+        }) {
             if label.is_some() {
                 binding.label = label;
             }

@@ -74,6 +74,7 @@ mod safe_triangle;
 mod search_bar;
 mod server;
 mod session_management;
+pub(crate) mod session_memory;
 mod shell_indicator;
 mod suggestions;
 mod system;
@@ -228,6 +229,7 @@ use crate::server::cloud_objects::{listener::Listener, update_manager::UpdateMan
 use crate::server::experiments::ServerExperiments;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
+use crate::session_memory::model::SessionMemoryModel;
 use crate::settings::cloud_preferences_syncer::initialize_cloud_preferences_syncer;
 use crate::settings::manager::SettingsManager;
 use crate::settings::{AccessibilitySettings, ScrollSettings, SelectionSettings};
@@ -1207,6 +1209,7 @@ pub(crate) fn initialize_app(
         persisted_projects,
         persisted_project_rules,
         persisted_ignored_suggestions,
+        persisted_session_memory_records,
         persisted_mcp_server_installations,
         mcp_servers_to_restore,
     ) = sqlite_data
@@ -1228,12 +1231,14 @@ pub(crate) fn initialize_app(
                 sqlite_data.projects,
                 sqlite_data.project_rules,
                 sqlite_data.ignored_suggestions,
+                sqlite_data.session_memory_records,
                 sqlite_data.mcp_server_installations,
                 sqlite_data.mcp_servers_to_restore,
             )
         })
         .unwrap_or_else(|| {
             (
+                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -1540,6 +1545,15 @@ pub(crate) fn initialize_app(
 
     ctx.add_singleton_model(|ctx| {
         ProjectManagementModel::new(persisted_projects, persistence_writer.sender(), ctx)
+    });
+
+    let session_memory_event_sink =
+        SessionMemoryModel::persistence_event_sink(persistence_writer.sender());
+    ctx.add_singleton_model(move |_| {
+        SessionMemoryModel::from_persisted_records(
+            persisted_session_memory_records,
+            session_memory_event_sink,
+        )
     });
 
     ctx.add_singleton_model(move |_| History::new(command_history));
