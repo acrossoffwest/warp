@@ -861,6 +861,34 @@ pub struct NewServerExperiment {
     pub experiment: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = crate::schema::session_memory_records)]
+#[diesel(primary_key(id))]
+pub struct SessionMemoryRecord {
+    pub id: String,
+    pub source: String,
+    pub kind: String,
+    pub status: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub cwd: Option<String>,
+    pub project: Option<String>,
+    pub native_session_id: Option<String>,
+    pub transcript_path: Option<String>,
+    pub terminal_pane_uuid: Option<Vec<u8>>,
+    pub app_window_fingerprint: Option<String>,
+    pub app_tab_fingerprint: Option<String>,
+    pub last_command: Option<String>,
+    pub last_exit_code: Option<i32>,
+    pub launch_argv: Option<String>,
+    pub permission_mode: String,
+    pub last_seen_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub closed_intentionally_at: Option<i64>,
+    pub restore_payload: Option<String>,
+}
+
 #[derive(Debug, Insertable)]
 #[diesel(table_name = current_user_information)]
 pub struct CurrentUserInformation {

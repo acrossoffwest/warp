@@ -11,6 +11,7 @@ pub(crate) mod left_panel;
 pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod right_panel;
+pub(crate) mod session_memory_board;
 mod startup_directory;
 #[cfg(test)]
 #[path = "view_tests.rs"]
@@ -21,63 +22,63 @@ mod wasm_view;
 
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
-    render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
-    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
+    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID, VerticalTabsPanelState, render_detail_sidecar,
+    render_settings_popup,
 };
 use crate::workspace::cross_window_tab_drag::{
     AttachTarget, CrossWindowTabDrag, DragResult, DropResult, GhostState,
 };
 pub(crate) use onboarding::OnboardingTutorial;
 
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
 };
+use crate::ai::agent_management::AgentManagementEvent;
+use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::notifications::toast_stack::AgentNotificationToastStack;
 use crate::ai::agent_management::notifications::view::{
     NotificationMailboxView, NotificationMailboxViewEvent,
 };
-use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
-use crate::ai::agent_management::AgentManagementEvent;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
-use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
+use crate::ai::blocklist::FORK_PREFIX;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
-use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::touched_repos::{
     derive_touched_workspace, extract_paths_from_conversation, pick_handoff_overlap_env,
 };
-use crate::ai::blocklist::history_model::{load_conversation_from_server, CloudConversationData};
+use crate::ai::blocklist::history_model::{CloudConversationData, load_conversation_from_server};
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::{
     SuggestedRuleAndId, SuggestedRuleModal, SuggestedRuleModalEvent,
 };
-use crate::ai::blocklist::FORK_PREFIX;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::AIRequestUsageModel;
 use crate::ai::{
-    agent::{api::ServerConversationToken, conversation::AIConversationId, EntrypointType},
+    agent::{EntrypointType, api::ServerConversationToken, conversation::AIConversationId},
     blocklist::{
+        SlashCommandRequest,
         inline_action::code_diff_view::CodeDiffView,
         suggested_agent_mode_workflow_modal::{
             SuggestedAgentModeWorkflowModal, SuggestedAgentModeWorkflowModalEvent,
         },
-        SlashCommandRequest,
     },
-    facts::{view::AIFactPage, AIFactManager, AIFactView, AIFactViewEvent},
+    facts::{AIFactManager, AIFactView, AIFactViewEvent, view::AIFactPage},
 };
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::app_state::{
@@ -86,10 +87,10 @@ use crate::app_state::{
     TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::code::buffer_location::BufferLocation;
-use crate::code_review::diff_state::DiffStateModel;
 #[cfg(feature = "local_fs")]
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::GlobalCodeReviewModel;
+use crate::code_review::diff_state::DiffStateModel;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::default_terminal::DefaultTerminal;
 use crate::notebooks::CloudNotebook;
@@ -126,12 +127,13 @@ use crate::util::file::external_editor::Editor;
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_with_editor_choice, EditorLayout};
+use crate::util::openable_file_type::{EditorLayout, resolve_file_target_with_editor_choice};
 
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::BlocklistAIHistoryModel;
 use crate::terminal::CLIAgent;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -149,20 +151,25 @@ use crate::workspace::view::launch_modal::{LaunchModal, LaunchModalEvent, OzLaun
 use crate::workspace::view::openwarp_launch_modal::{
     OpenWarpLaunchModal, OpenWarpLaunchModalEvent,
 };
+use crate::workspace::view::session_memory_board::{
+    AgentPermissionMode as SessionMemoryBoardAgentPermissionMode, SessionMemoryBoard,
+    SessionMemoryBoardAction, SessionMemoryBoardRow,
+    SessionMemorySource as SessionMemoryBoardSource,
+    SessionMemoryStatus as SessionMemoryBoardStatus,
+};
 use crate::workspace::{ForkFromExchange, ForkedConversationDestination};
-use crate::BlocklistAIHistoryModel;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 #[cfg(all(target_os = "macos", feature = "crash_reporting"))]
 use sentry::protocol::{Attachment, AttachmentType};
 use serde_json;
 use warpui::notification::NotificationSendError;
 
+use super::WorkspaceRegistry;
 use super::hoa_onboarding::{
-    mark_hoa_onboarding_completed, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep,
+    HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep, mark_hoa_onboarding_completed,
 };
 use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::util;
-use super::WorkspaceRegistry;
 use crate::ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -189,6 +196,14 @@ use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::auth::AuthClient;
+use crate::session_memory::model::SessionMemoryModel;
+use crate::session_memory::restore::{
+    RestoreError, RestorePlan, agent_restore_plan, terminal_restore_plan,
+};
+use crate::session_memory::types::{
+    AgentPermissionMode as SessionMemoryAgentPermissionMode, SessionMemoryRecord,
+    SessionMemorySource, SessionMemoryStatus,
+};
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
     DefaultSessionMode, InputModeSettings,
@@ -229,15 +244,15 @@ use crate::wasm_nux_dialog::WasmNUXDialog;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::settings::WarpDriveSettingsChangedEvent;
 use crate::env_vars::{
-    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
     CloudEnvVarCollection,
+    manager::{EnvVarCollectionManager, EnvVarCollectionSource},
 };
 use crate::settings::cloud_preferences::CloudPreferencesSettings;
 
 use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::AuthStateProvider;
 use crate::autoupdate::{
-    is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
+    AutoupdateState, AutoupdateStateEvent, RelaunchModel, is_incoming_version_past_current,
 };
 use crate::banner::BannerState;
 use crate::changelog_model::{ChangelogModel, ChangelogRequestType, Event as ChangelogEvent};
@@ -255,8 +270,8 @@ use crate::drive::{
 };
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::menu::{
-    Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource,
-    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH,
+    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH, Event as MenuEvent, Menu, MenuItem, MenuItemFields,
+    MenuSelectionSource,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -282,11 +297,11 @@ use crate::prompt::editor_modal::{
 };
 use crate::referral_theme_status::ReferralThemeEvent;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
     ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
+    mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
 };
 use crate::reward_view::{RewardEvent, RewardKind, RewardView};
-use crate::root_view::{quake_mode_window_id, NewWorkspaceSource, OpenLaunchConfigArg};
+use crate::root_view::{NewWorkspaceSource, OpenLaunchConfigArg, quake_mode_window_id};
 use crate::search::command_search::searcher::{
     AcceptedHistoryItem, AcceptedWorkflow, CommandSearchItemAction,
 };
@@ -304,10 +319,10 @@ use crate::server::telemetry::{
 };
 use crate::session_management::{SessionNavigationData, SessionSource, TabNavigationData};
 use crate::settings::{
-    active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
-    AppEditorSettings, BlockVisibilitySettings, ChangelogSettings, CursorBlink, DebugSettings,
-    FontSettings, GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
-    SelectionSettings, Settings, SshSettings, ThemeSettings,
+    AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
+    ChangelogSettings, CursorBlink, DebugSettings, FontSettings, GPUSettings, InputSettings,
+    MonospaceFontSize, PaneSettings, PrivacySettings, SelectionSettings, Settings, SshSettings,
+    ThemeSettings, active_theme_kind, respect_system_theme,
 };
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
@@ -321,7 +336,7 @@ use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::resizable_data::{
-    ModalSizes, ModalType, ResizableData, DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH,
+    DEFAULT_LEFT_PANEL_WIDTH, DEFAULT_RIGHT_PANEL_WIDTH, ModalSizes, ModalType, ResizableData,
 };
 use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::{
@@ -340,13 +355,13 @@ use crate::terminal::{self, SizeInfo, TerminalView};
 #[cfg(target_os = "macos")]
 use crate::workspace::cli_install;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{report_if_error, AgentNotificationsModel};
+use crate::{AgentNotificationsModel, report_if_error};
 use ::settings::{Setting, ToggleableSetting};
 use warp_core::features::FeatureFlag;
 
 use crate::search::{self, QueryFilter};
 use crate::terminal::view::{
-    SyncEvent, SyncInputType, TerminalAction, NOTIFICATIONS_TROUBLESHOOT_URL,
+    NOTIFICATIONS_TROUBLESHOOT_URL, SyncEvent, SyncInputType, TerminalAction,
 };
 use crate::terminal::{BlockListSettings, TerminalModel};
 use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
@@ -356,31 +371,31 @@ use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModal
 use crate::tips::{TipsEvent, TipsView};
 use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
 use crate::undo_close::UndoCloseStack;
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 #[cfg(feature = "local_fs")]
 use crate::user_config::{
     ensure_default_worktree_config, find_unused_tab_config_path, find_unused_toml_path,
     find_unused_worktree_config_path, materialize_default_worktree_config, sanitize_toml_base_name,
     tab_configs_dir,
 };
-use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{
     keybinding_name_to_display_string, keybinding_name_to_keystroke, trigger_to_keystroke,
 };
 use crate::util::links;
-use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
+use crate::util::traffic_lights::{TrafficLightMouseStates, TrafficLightSide, traffic_light_data};
 use crate::util::truncation::truncate_from_end;
 #[cfg(target_family = "wasm")]
 use crate::view_components::action_button::ActionButton;
 use crate::view_components::callout_bubble::{
-    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
+    CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, render_callout_bubble,
 };
 use crate::view_components::{
     AgentToast, AgentToastStack, DismissibleToast, DismissibleToastStack, ToastLink,
 };
 use crate::window_settings::{WindowSettings, WindowSettingsChangedEvent, ZoomLevel};
 use crate::workflows::{
-    manager::WorkflowOpenSource, AIWorkflowOrigin, CloudWorkflow, WorkflowSelectionSource,
-    WorkflowSource, WorkflowType, WorkflowViewMode,
+    AIWorkflowOrigin, CloudWorkflow, WorkflowSelectionSource, WorkflowSource, WorkflowType,
+    WorkflowViewMode, manager::WorkflowOpenSource,
 };
 use crate::workspace::action::CommandSearchOptions;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
@@ -388,15 +403,15 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::toast_stack::{
     ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
 };
+use crate::{GlobalResourceHandles, send_telemetry_from_ctx};
 use crate::{
     ai_assistant::{
+        AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AskAIType,
         panel::{AIAssistantPanelEvent, AIAssistantPanelView},
-        AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR,
     },
     settings,
     ui_components::blended_colors,
 };
-use crate::{send_telemetry_from_ctx, GlobalResourceHandles};
 
 use futures::Future;
 use itertools::Itertools;
@@ -413,7 +428,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use warp_core::context_flag::ContextFlag;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::semantic_selection::SemanticSelection;
-use warp_util::path::{user_friendly_path, LineAndColumnArg};
+use warp_util::path::{LineAndColumnArg, user_friendly_path};
 use warpui::fonts::Weight;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 
@@ -426,7 +441,7 @@ use warpui::elements::{
     MouseInBehavior, Rect,
 };
 use warpui::ui_components::button::{Button, ButtonVariant};
-use warpui::windowing::{state::ApplicationStage, StateEvent, WindowManager};
+use warpui::windowing::{StateEvent, WindowManager, state::ApplicationStage};
 use warpui::{elements::MouseStateHandle, fonts::Properties};
 
 use crate::{autoupdate, channel::ChannelState};
@@ -480,17 +495,17 @@ use crate::tab_configs::{
     NewWorktreeModal, NewWorktreeModalEvent, TabConfigParamsModal, TabConfigParamsModalEvent,
 };
 
+use crate::TelemetryEvent;
 use crate::code::editor::{add_color, remove_color};
 use crate::palette::PaletteMode;
 use crate::search::command_palette::view::{Event as CommandPaletteEvent, View as CommandPalette};
 use crate::server::telemetry::{NotificationsTurnedOnSource, PaletteSource, TabRenameEvent};
 use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
+    NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TabBarState,
+    TabComponent, TabData, TabTelemetryAction, tab_position_id, uses_vertical_tabs,
 };
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::ui_components::icons;
-use crate::TelemetryEvent;
 use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
@@ -505,10 +520,10 @@ use std::path::Path;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process;
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::{cmp::Ordering, sync::Arc};
-use warp_core::ui::theme::{color::internal_colors, phenomenon::PhenomenonStyle, Fill};
-use warp_core::ui::{color::coloru_with_opacity, Icon};
+use warp_core::ui::theme::{Fill, color::internal_colors, phenomenon::PhenomenonStyle};
+use warp_core::ui::{Icon, color::coloru_with_opacity};
 use warp_editor::editor::NavigationKey;
 use warpui::keymap::Context;
 use warpui::notification::{RequestPermissionsOutcome, UserNotification};
@@ -518,6 +533,7 @@ use warpui::platform::{
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
+    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
     accessibility::{
         AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
     },
@@ -529,8 +545,7 @@ use warpui::{
         PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Shrinkable,
         Stack, Text,
     },
-    geometry::vector::{vec2f, Vector2F},
-    AppContext, Entity, TypedActionView, UpdateView, View, ViewContext, ViewHandle,
+    geometry::vector::{Vector2F, vec2f},
 };
 use warpui::{
     EntityId, FocusContext, ModelHandle, SingletonEntity, UpdateModel, ViewAsRef, WeakViewHandle,
@@ -806,8 +821,15 @@ enum NewSessionSidecarSelection {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SessionSidecarSelection {
-    NewSession { agent: CLIAgent, directory: PathBuf },
-    ResumeSession { agent: CLIAgent, directory: PathBuf, session_id: String },
+    NewSession {
+        agent: CLIAgent,
+        directory: PathBuf,
+    },
+    ResumeSession {
+        agent: CLIAgent,
+        directory: PathBuf,
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -1059,6 +1081,7 @@ pub struct Workspace {
     notification_mailbox_view: Option<ViewHandle<NotificationMailboxView>>,
     notification_toast_stack: Option<ViewHandle<AgentNotificationToastStack>>,
     lightbox_view: Option<ViewHandle<LightboxView>>,
+    session_memory_board: Option<ViewHandle<SessionMemoryBoard>>,
     hoa_onboarding_flow: Option<ViewHandle<HoaOnboardingFlow>>,
     /// Pinned position for the vertical tabs callout so it doesn't move when
     /// the user toggles between vertical and horizontal tabs.
@@ -1091,7 +1114,10 @@ pub struct Workspace {
     /// doesn't re-scan jsonl/sqlite. Invalidated by source-mtime change.
     sessions_cache: std::collections::HashMap<
         (CLIAgent, PathBuf),
-        (Option<std::time::SystemTime>, Vec<crate::workspace::agent_session_reader::AgentSessionEntry>),
+        (
+            Option<std::time::SystemTime>,
+            Vec<crate::workspace::agent_session_reader::AgentSessionEntry>,
+        ),
     >,
     worktree_sidecar_search_editor: ViewHandle<EditorView>,
     worktree_sidecar_search_query: String,
@@ -1949,7 +1975,10 @@ impl Workspace {
 
     fn build_sessions_sub_sidecar_menus(
         ctx: &mut ViewContext<Self>,
-    ) -> (ViewHandle<Menu<SessionSidecarSelection>>, ViewHandle<EditorView>) {
+    ) -> (
+        ViewHandle<Menu<SessionSidecarSelection>>,
+        ViewHandle<EditorView>,
+    ) {
         let sessions_sub_sidecar = ctx.add_typed_action_view(|_ctx| {
             Menu::<SessionSidecarSelection>::new()
                 .without_item_action_dispatch()
@@ -2097,12 +2126,16 @@ impl Workspace {
                     && ai_settings.default_tab_config_path() == path.to_string_lossy();
                 if is_removed_default {
                     AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .default_session_mode_internal
-                            .set_value(DefaultSessionMode::Terminal, ctx));
-                        report_if_error!(settings
-                            .default_tab_config_path
-                            .set_value(String::new(), ctx));
+                        report_if_error!(
+                            settings
+                                .default_session_mode_internal
+                                .set_value(DefaultSessionMode::Terminal, ctx)
+                        );
+                        report_if_error!(
+                            settings
+                                .default_tab_config_path
+                                .set_value(String::new(), ctx)
+                        );
                     });
                 }
                 if let Err(e) = std::fs::remove_file(path) {
@@ -3331,6 +3364,7 @@ impl Workspace {
             free_tier_limit_hit_modal,
             free_tier_limit_check_triggered: false,
             lightbox_view: None,
+            session_memory_board: None,
             hoa_onboarding_flow: None,
             hoa_vtabs_callout_pinned_position: None,
             pending_pane_group_transfer: false,
@@ -5762,9 +5796,11 @@ impl Workspace {
             right,
         };
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .header_toolbar_chip_selection
-                .set_value(selection, ctx));
+            report_if_error!(
+                settings
+                    .header_toolbar_chip_selection
+                    .set_value(selection, ctx)
+            );
         });
     }
 
@@ -5812,9 +5848,11 @@ impl Workspace {
         if !FeatureFlag::ConfigurableToolbar.is_enabled() {
             return;
         }
-        let items = vec![MenuItemFields::new("Re-arrange toolbar items")
-            .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
-            .into_item()];
+        let items = vec![
+            MenuItemFields::new("Re-arrange toolbar items")
+                .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
+                .into_item(),
+        ];
         self.header_toolbar_context_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.show_header_toolbar_context_menu = Some(position);
@@ -7920,17 +7958,21 @@ impl Workspace {
 
     fn toggle_recording_mode(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(debug_settings
-                .recording_mode
-                .toggle_and_save_value(settings_ctx));
+            report_if_error!(
+                debug_settings
+                    .recording_mode
+                    .toggle_and_save_value(settings_ctx)
+            );
         });
     }
 
     fn toggle_in_band_generators(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(debug_settings
-                .are_in_band_generators_for_all_sessions_enabled
-                .toggle_and_save_value(settings_ctx));
+            report_if_error!(
+                debug_settings
+                    .are_in_band_generators_for_all_sessions_enabled
+                    .toggle_and_save_value(settings_ctx)
+            );
         });
     }
 
@@ -8093,9 +8135,11 @@ impl Workspace {
 
         // Mark that we've done the one-time auto-open
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .has_auto_opened_conversation_list
-                .set_value(true, ctx));
+            report_if_error!(
+                settings
+                    .has_auto_opened_conversation_list
+                    .set_value(true, ctx)
+            );
         });
     }
 
@@ -9060,7 +9104,8 @@ impl Workspace {
             .unwrap_or(true);
         if needs_reload {
             let all = agent_session_reader::read_all_sessions(agent, &directory);
-            self.sessions_cache.insert(cache_key.clone(), (current_version, all));
+            self.sessions_cache
+                .insert(cache_key.clone(), (current_version, all));
         }
         let all = self
             .sessions_cache
@@ -9149,10 +9194,8 @@ impl Workspace {
             .update(ctx, |menu, view_ctx| menu.set_items(items, view_ctx));
         self.show_sessions_sub_sidecar = true;
 
-        let sidecar_rect = ctx.element_position_by_id_at_last_frame(
-            self.window_id,
-            SESSIONS_SUB_SIDECAR_POSITION_ID,
-        );
+        let sidecar_rect = ctx
+            .element_position_by_id_at_last_frame(self.window_id, SESSIONS_SUB_SIDECAR_POSITION_ID);
         self.new_session_sidecar_menu.update(ctx, |menu, _| {
             menu.set_safe_zone_target(sidecar_rect);
             menu.set_submenu_being_shown_for_item_index(Some(hovered_index));
@@ -10306,9 +10349,11 @@ impl Workspace {
 
     pub fn toggle_block_snackbar(&mut self, ctx: &mut ViewContext<Self>) {
         BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
-            report_if_error!(blocklist_settings
-                .snackbar_enabled
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                blocklist_settings
+                    .snackbar_enabled
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -10320,9 +10365,11 @@ impl Workspace {
 
     pub fn toggle_syntax_highlighting(&mut self, ctx: &mut ViewContext<Self>) {
         InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-            report_if_error!(input_settings
-                .syntax_highlighting
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                input_settings
+                    .syntax_highlighting
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -10337,9 +10384,11 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         AccessibilitySettings::handle(ctx).update(ctx, |accessibility_settings, ctx| {
-            report_if_error!(accessibility_settings
-                .a11y_verbosity
-                .set_value(verbosity, ctx));
+            report_if_error!(
+                accessibility_settings
+                    .a11y_verbosity
+                    .set_value(verbosity, ctx)
+            );
         });
     }
 
@@ -16567,6 +16616,312 @@ impl Workspace {
         self.show_settings_with_section(None, ctx);
     }
 
+    fn open_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
+        self.close_palette(false, Some("workspace:show_session_memory"), ctx);
+        self.close_all_overlays(ctx);
+
+        let rows = Self::session_memory_board_rows(ctx);
+        if let Some(board) = &self.session_memory_board {
+            board.update(ctx, |board, ctx| board.set_rows(rows, ctx));
+            ctx.focus(board);
+            ctx.notify();
+            return;
+        }
+
+        let board = ctx.add_typed_action_view(|_| SessionMemoryBoard::new(rows));
+        ctx.subscribe_to_view(&board, |me, _, event, ctx| {
+            me.handle_session_memory_board_action(event, ctx);
+        });
+
+        if let Some(model) = Self::existing_session_memory_model(ctx) {
+            ctx.subscribe_to_model(&model, |me, model, _event, ctx| {
+                let rows = Self::session_memory_records_to_board_rows(model.as_ref(ctx).records());
+                if let Some(board) = &me.session_memory_board {
+                    board.update(ctx, |board, ctx| board.set_rows(rows, ctx));
+                }
+            });
+        }
+
+        ctx.focus(&board);
+        self.session_memory_board = Some(board);
+        ctx.notify();
+    }
+
+    fn close_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
+        self.session_memory_board = None;
+        self.focus_active_tab(ctx);
+        ctx.notify();
+    }
+
+    fn existing_session_memory_model(ctx: &AppContext) -> Option<ModelHandle<SessionMemoryModel>> {
+        ctx.models_of_type::<SessionMemoryModel>()
+            .into_iter()
+            .next()
+    }
+
+    fn session_memory_board_rows(ctx: &AppContext) -> Vec<SessionMemoryBoardRow> {
+        Self::existing_session_memory_model(ctx)
+            .map(|model| Self::session_memory_records_to_board_rows(model.as_ref(ctx).records()))
+            .unwrap_or_default()
+    }
+
+    fn session_memory_records_to_board_rows(
+        records: &[SessionMemoryRecord],
+    ) -> Vec<SessionMemoryBoardRow> {
+        records
+            .iter()
+            .map(Self::session_memory_record_to_board_row)
+            .collect()
+    }
+
+    fn session_memory_record_to_board_row(record: &SessionMemoryRecord) -> SessionMemoryBoardRow {
+        SessionMemoryBoardRow {
+            id: record.id.clone(),
+            source: match record.source {
+                SessionMemorySource::WarpTerminal => SessionMemoryBoardSource::WarpTerminal,
+                SessionMemorySource::ClaudeCode => SessionMemoryBoardSource::ClaudeCode,
+                SessionMemorySource::Codex => SessionMemoryBoardSource::Codex,
+            },
+            status: match record.status {
+                SessionMemoryStatus::Live => SessionMemoryBoardStatus::Live,
+                SessionMemoryStatus::Blocked => SessionMemoryBoardStatus::Blocked,
+                SessionMemoryStatus::Success => SessionMemoryBoardStatus::Success,
+                SessionMemoryStatus::UserClosed => SessionMemoryBoardStatus::UserClosed,
+                SessionMemoryStatus::Interrupted => SessionMemoryBoardStatus::Interrupted,
+                SessionMemoryStatus::Stale => SessionMemoryBoardStatus::Stale,
+                SessionMemoryStatus::Unknown => SessionMemoryBoardStatus::Unknown,
+            },
+            title: record.title.clone(),
+            cwd: record.cwd.clone(),
+            project: record.project.clone(),
+            native_session_id: record.native_session_id.clone(),
+            transcript_path: record.transcript_path.clone(),
+            last_command: record.last_command.clone(),
+            permission_mode: match record.permission_mode {
+                SessionMemoryAgentPermissionMode::Normal => {
+                    SessionMemoryBoardAgentPermissionMode::Normal
+                }
+                SessionMemoryAgentPermissionMode::Dangerous => {
+                    SessionMemoryBoardAgentPermissionMode::Dangerous
+                }
+                SessionMemoryAgentPermissionMode::Unknown => {
+                    SessionMemoryBoardAgentPermissionMode::Unknown
+                }
+            },
+        }
+    }
+
+    fn find_session_memory_record(
+        &self,
+        id: &str,
+        ctx: &AppContext,
+    ) -> Option<SessionMemoryRecord> {
+        Self::existing_session_memory_model(ctx).and_then(|model| {
+            model
+                .as_ref(ctx)
+                .records()
+                .iter()
+                .find(|record| record.id == id)
+                .cloned()
+        })
+    }
+
+    fn handle_session_memory_board_action(
+        &mut self,
+        action: &SessionMemoryBoardAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match action {
+            SessionMemoryBoardAction::Restore(id) => {
+                self.restore_session_memory_record(id, false, ctx);
+            }
+            SessionMemoryBoardAction::RestoreInSplit(id) => {
+                self.restore_session_memory_record(id, true, ctx);
+            }
+            SessionMemoryBoardAction::CopyLastCommand(id) => {
+                self.copy_session_memory_last_command(id, ctx);
+            }
+            SessionMemoryBoardAction::OpenTranscript(id) => {
+                self.open_session_memory_transcript(id, ctx);
+            }
+            SessionMemoryBoardAction::Delete(id) => {
+                self.delete_session_memory_record(id, ctx);
+            }
+        }
+    }
+
+    fn restore_session_memory_record(
+        &mut self,
+        id: &str,
+        in_split: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(record) = self.find_session_memory_record(id, ctx) else {
+            self.show_session_memory_toast("Session memory record is no longer available.", ctx);
+            return;
+        };
+
+        let plan = match record.source {
+            SessionMemorySource::WarpTerminal => Ok(terminal_restore_plan(
+                &record,
+                *AISettings::as_ref(ctx).session_memory_auto_run_restored_commands,
+            )),
+            SessionMemorySource::ClaudeCode | SessionMemorySource::Codex => {
+                agent_restore_plan(&record)
+            }
+        };
+
+        let plan = match plan {
+            Ok(plan) => plan,
+            Err(err) => {
+                self.show_session_memory_toast(&Self::restore_error_message(err), ctx);
+                return;
+            }
+        };
+
+        let Some(terminal_view) = self.open_terminal_for_restore_plan(&plan, in_split, ctx) else {
+            self.show_session_memory_toast("Could not open a terminal for restore.", ctx);
+            return;
+        };
+
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            Self::apply_restore_plan_to_terminal(terminal_view, &plan, ctx);
+        });
+
+        self.close_session_memory_board(ctx);
+    }
+
+    fn open_terminal_for_restore_plan(
+        &mut self,
+        plan: &RestorePlan,
+        in_split: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ViewHandle<TerminalView>> {
+        if in_split {
+            let pane_group = self.active_tab_pane_group().clone();
+            return pane_group.update(ctx, |pane_group, ctx| {
+                let pane_id = pane_group.split_focused_remote(PaneGroupDirection::Right, ctx);
+                pane_group.terminal_view_from_pane_id(pane_id, ctx)
+            });
+        }
+
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                initial_directory: plan.cwd().map(PathBuf::from),
+                hide_homepage: true,
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+
+        self.active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+    }
+
+    fn apply_restore_plan_to_terminal(
+        terminal_view: &mut TerminalView,
+        plan: &RestorePlan,
+        ctx: &mut ViewContext<TerminalView>,
+    ) {
+        match plan {
+            RestorePlan::Terminal {
+                command_for_composer,
+                auto_run,
+                ..
+            } => {
+                if let Some(command) = command_for_composer {
+                    if *auto_run {
+                        terminal_view.execute_command_or_set_pending(command, ctx);
+                    } else {
+                        terminal_view.set_pending_command(command, ctx);
+                    }
+                }
+            }
+            RestorePlan::Agent { command, .. } => {
+                terminal_view.execute_command_or_set_pending(command, ctx);
+            }
+        }
+    }
+
+    fn copy_session_memory_last_command(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        let Some(record) = self.find_session_memory_record(id, ctx) else {
+            self.show_session_memory_toast("Session memory record is no longer available.", ctx);
+            return;
+        };
+
+        let Some(command) = record.last_command else {
+            self.show_session_memory_toast("No last command was captured for this session.", ctx);
+            return;
+        };
+
+        ctx.clipboard().write(ClipboardContent::plain_text(command));
+        self.show_session_memory_toast("Last command copied.", ctx);
+    }
+
+    fn open_session_memory_transcript(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        let Some(record) = self.find_session_memory_record(id, ctx) else {
+            self.show_session_memory_toast("Session memory record is no longer available.", ctx);
+            return;
+        };
+
+        let Some(path) = record.transcript_path else {
+            self.show_session_memory_toast("No transcript was captured for this session.", ctx);
+            return;
+        };
+
+        ctx.open_file_path(&path);
+        self.close_session_memory_board(ctx);
+    }
+
+    fn delete_session_memory_record(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        if let Some(model) = Self::existing_session_memory_model(ctx) {
+            model.update(ctx, |model, _| model.delete(id));
+        }
+
+        if let Some(sender) = &self.model_event_sender {
+            if let Err(err) =
+                sender.send(ModelEvent::DeleteSessionMemoryRecord { id: id.to_owned() })
+            {
+                log::warn!("Failed to persist session memory delete for {id}: {err}");
+            }
+        }
+
+        let rows = Self::session_memory_board_rows(ctx);
+        if let Some(board) = &self.session_memory_board {
+            board.update(ctx, |board, ctx| board.set_rows(rows, ctx));
+        }
+        ctx.notify();
+    }
+
+    fn restore_error_message(err: RestoreError) -> String {
+        match err {
+            RestoreError::MissingWorkingDirectory(path) if path.as_os_str().is_empty() => {
+                "No working directory was captured for this session.".to_owned()
+            }
+            RestoreError::MissingWorkingDirectory(path) => {
+                format!(
+                    "The saved working directory no longer exists: {}",
+                    path.display()
+                )
+            }
+            RestoreError::MissingSessionId => {
+                "No native session id was captured for this agent session.".to_owned()
+            }
+            RestoreError::UnsupportedSource => {
+                "This session source cannot be restored as an agent session.".to_owned()
+            }
+        }
+    }
+
+    fn show_session_memory_toast(&mut self, message: &str, ctx: &mut ViewContext<Self>) {
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(message.to_owned()), ctx);
+        });
+    }
+
     fn show_settings_with_section(
         &mut self,
         section: Option<SettingsSection>,
@@ -16704,9 +17059,11 @@ impl Workspace {
 
     fn reset_zoom(&mut self, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(ZoomLevel::default_value(), ctx));
+            report_if_error!(
+                window_settings
+                    .zoom_level
+                    .set_value(ZoomLevel::default_value(), ctx)
+            );
         });
     }
 
@@ -16726,9 +17083,11 @@ impl Workspace {
         };
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .zoom_level
-                .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx));
+            report_if_error!(
+                window_settings
+                    .zoom_level
+                    .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx)
+            );
         });
     }
 
@@ -16741,9 +17100,11 @@ impl Workspace {
 
     fn set_terminal_font_size(&mut self, new_font_size: f32, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(font_settings
-                .monospace_font_size
-                .set_value(new_font_size, ctx));
+            report_if_error!(
+                font_settings
+                    .monospace_font_size
+                    .set_value(new_font_size, ctx)
+            );
         });
     }
 
@@ -17023,8 +17384,8 @@ impl Workspace {
     }
 
     fn handle_codex_modal_event(&mut self, event: &CodexModalEvent, ctx: &mut ViewContext<Self>) {
-        use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
         use crate::AIExecutionProfilesModel;
+        use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 
         match event {
             CodexModalEvent::Close => {
@@ -21013,12 +21374,16 @@ impl TypedActionView for Workspace {
                         } else {
                             // Config missing or deleted — clear and fall through to Terminal.
                             AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                                report_if_error!(settings
-                                    .default_session_mode_internal
-                                    .set_value(DefaultSessionMode::Terminal, ctx));
-                                report_if_error!(settings
-                                    .default_tab_config_path
-                                    .set_value(String::new(), ctx));
+                                report_if_error!(
+                                    settings
+                                        .default_session_mode_internal
+                                        .set_value(DefaultSessionMode::Terminal, ctx)
+                                );
+                                report_if_error!(
+                                    settings
+                                        .default_tab_config_path
+                                        .set_value(String::new(), ctx)
+                                );
                             });
                             self.add_terminal_tab(false, ctx);
                         }
@@ -21150,9 +21515,11 @@ impl TypedActionView for Workspace {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.default_session_mode_internal.set_value(*mode, ctx));
                     if let Some(path) = tab_config_path {
-                        report_if_error!(settings
-                            .default_tab_config_path
-                            .set_value(path.to_string_lossy().into_owned(), ctx));
+                        report_if_error!(
+                            settings
+                                .default_tab_config_path
+                                .set_value(path.to_string_lossy().into_owned(), ctx)
+                        );
                     }
                 });
                 #[cfg(feature = "local_tty")]
@@ -21291,6 +21658,8 @@ impl TypedActionView for Workspace {
                 self.show_keyboard_settings(keybinding_name.as_deref(), ctx)
             }
             ShowSettings => self.show_settings(ctx),
+            ShowSessionMemory => self.open_session_memory_board(ctx),
+            CloseSessionMemoryBoard => self.close_session_memory_board(ctx),
             ShowSettingsPage(section) => self.show_settings_with_section(Some(*section), ctx),
             ShowSettingsPageWithSearch {
                 search_query,
@@ -24038,6 +24407,17 @@ impl View for Workspace {
 
         if let Some(lightbox_view) = &self.lightbox_view {
             stack.add_child(ChildView::new(lightbox_view).finish());
+        }
+
+        if let Some(board) = &self.session_memory_board {
+            stack.add_child(
+                Dismiss::new(Align::new(ChildView::new(board).finish()).finish())
+                    .prevent_interaction_with_other_elements()
+                    .on_dismiss(|ctx, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::CloseSessionMemoryBoard);
+                    })
+                    .finish(),
+            );
         }
 
         if FeatureFlag::CreatingSharedSessions.is_enabled()
