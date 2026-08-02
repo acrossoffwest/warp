@@ -182,6 +182,19 @@ impl CLIAgent {
         }
     }
 
+    /// Build a resume command preserving a previously captured permission mode.
+    pub fn resume_command_preserving_permission(
+        &self,
+        session_id: &str,
+        permission_mode: crate::session_memory::types::AgentPermissionMode,
+    ) -> String {
+        let dangerous = matches!(
+            permission_mode,
+            crate::session_memory::types::AgentPermissionMode::Dangerous
+        );
+        self.resume_command_with_flags(session_id, dangerous)
+    }
+
     pub fn command_prefix(&self) -> &'static str {
         match self {
             CLIAgent::Claude => "claude",

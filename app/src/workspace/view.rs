@@ -11,6 +11,7 @@ pub(crate) mod left_panel;
 pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod right_panel;
+pub(crate) mod session_memory_board;
 mod startup_directory;
 #[cfg(test)]
 #[path = "view_tests.rs"]
@@ -806,8 +807,15 @@ enum NewSessionSidecarSelection {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SessionSidecarSelection {
-    NewSession { agent: CLIAgent, directory: PathBuf },
-    ResumeSession { agent: CLIAgent, directory: PathBuf, session_id: String },
+    NewSession {
+        agent: CLIAgent,
+        directory: PathBuf,
+    },
+    ResumeSession {
+        agent: CLIAgent,
+        directory: PathBuf,
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -1091,7 +1099,10 @@ pub struct Workspace {
     /// doesn't re-scan jsonl/sqlite. Invalidated by source-mtime change.
     sessions_cache: std::collections::HashMap<
         (CLIAgent, PathBuf),
-        (Option<std::time::SystemTime>, Vec<crate::workspace::agent_session_reader::AgentSessionEntry>),
+        (
+            Option<std::time::SystemTime>,
+            Vec<crate::workspace::agent_session_reader::AgentSessionEntry>,
+        ),
     >,
     worktree_sidecar_search_editor: ViewHandle<EditorView>,
     worktree_sidecar_search_query: String,
@@ -1949,7 +1960,10 @@ impl Workspace {
 
     fn build_sessions_sub_sidecar_menus(
         ctx: &mut ViewContext<Self>,
-    ) -> (ViewHandle<Menu<SessionSidecarSelection>>, ViewHandle<EditorView>) {
+    ) -> (
+        ViewHandle<Menu<SessionSidecarSelection>>,
+        ViewHandle<EditorView>,
+    ) {
         let sessions_sub_sidecar = ctx.add_typed_action_view(|_ctx| {
             Menu::<SessionSidecarSelection>::new()
                 .without_item_action_dispatch()
@@ -9060,7 +9074,8 @@ impl Workspace {
             .unwrap_or(true);
         if needs_reload {
             let all = agent_session_reader::read_all_sessions(agent, &directory);
-            self.sessions_cache.insert(cache_key.clone(), (current_version, all));
+            self.sessions_cache
+                .insert(cache_key.clone(), (current_version, all));
         }
         let all = self
             .sessions_cache
@@ -9149,10 +9164,8 @@ impl Workspace {
             .update(ctx, |menu, view_ctx| menu.set_items(items, view_ctx));
         self.show_sessions_sub_sidecar = true;
 
-        let sidecar_rect = ctx.element_position_by_id_at_last_frame(
-            self.window_id,
-            SESSIONS_SUB_SIDECAR_POSITION_ID,
-        );
+        let sidecar_rect = ctx
+            .element_position_by_id_at_last_frame(self.window_id, SESSIONS_SUB_SIDECAR_POSITION_ID);
         self.new_session_sidecar_menu.update(ctx, |menu, _| {
             menu.set_safe_zone_target(sidecar_rect);
             menu.set_submenu_being_shown_for_item_index(Some(hovered_index));
@@ -16567,6 +16580,19 @@ impl Workspace {
         self.show_settings_with_section(None, ctx);
     }
 
+    fn open_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
+        log::info!("Session Memory Board requested; board integration is pending.");
+        self.close_palette(true, Some("workspace:show_session_memory"), ctx);
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::default(
+                    "Session Memory Board integration is pending.".to_string(),
+                ),
+                ctx,
+            );
+        });
+    }
+
     fn show_settings_with_section(
         &mut self,
         section: Option<SettingsSection>,
@@ -21291,6 +21317,7 @@ impl TypedActionView for Workspace {
                 self.show_keyboard_settings(keybinding_name.as_deref(), ctx)
             }
             ShowSettings => self.show_settings(ctx),
+            ShowSessionMemory => self.open_session_memory_board(ctx),
             ShowSettingsPage(section) => self.show_settings_with_section(Some(*section), ctx),
             ShowSettingsPageWithSearch {
                 search_query,
