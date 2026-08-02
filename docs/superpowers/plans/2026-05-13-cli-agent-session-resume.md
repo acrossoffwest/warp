@@ -264,7 +264,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn warp_dir() -> PathBuf {
-        PathBuf::from("/Users/[redacted]/projects/own-projects/warp")
+        PathBuf::from("/home/user/projects/warp")
     }
 
     #[test]
@@ -343,7 +343,7 @@ pub mod agent_session_reader;
 - [ ] **Step 1.3: Run compile check**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo check -p warp 2>&1 | tail -30
 ```
 
@@ -352,7 +352,7 @@ Expected: compiles clean (zero errors). Warnings about unused functions are acce
 - [ ] **Step 1.4: Run unit tests (non-ignored)**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo test -p warp agent_session_reader 2>&1 | tail -20
 ```
 
@@ -361,7 +361,7 @@ Expected: `claude_slug_derivation`, `truncate_works`, `empty_vec_for_unknown_age
 - [ ] **Step 1.5: Run ignored integration tests manually**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo test -p warp agent_session_reader -- --ignored 2>&1 | tail -30
 ```
 
@@ -370,7 +370,7 @@ Expected: all four ignored tests PASS (they read real local files; if the sessio
 - [ ] **Step 1.6: Commit**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 git add app/src/workspace/agent_session_reader.rs app/src/workspace/mod.rs
 git commit -m "feat(workspace): add agent_session_reader for Claude/Codex session metadata"
 ```
@@ -416,7 +416,7 @@ fn resume_command_format() {
 - [ ] **Step 2.2: Run to confirm failure**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo test -p warp cli_agent_tests 2>&1 | grep -E "FAILED|error"
 ```
 
@@ -450,7 +450,7 @@ pub fn resume_command(&self, session_id: &str) -> String {
 - [ ] **Step 2.4: Run tests to confirm pass**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo test -p warp cli_agent_tests 2>&1 | tail -10
 ```
 
@@ -459,7 +459,7 @@ Expected: all tests PASS.
 - [ ] **Step 2.5: Commit**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 git add app/src/terminal/cli_agent.rs app/src/terminal/cli_agent_tests.rs
 git commit -m "feat(cli_agent): add supports_resume and resume_command"
 ```
@@ -537,7 +537,7 @@ sessions_sub_sidecar_filter: String::new(),
 - [ ] **Step 3.5: Compile check**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo check -p warp 2>&1 | grep "^error" | head -20
 ```
 
@@ -546,7 +546,7 @@ Expected: errors for missing `handle_sessions_sub_sidecar_event` and `build_sess
 - [ ] **Step 3.6: Commit (partial compile)**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 git add app/src/workspace/view.rs
 git commit -m "feat(workspace): add SessionSidecarSelection + sub-sidecar state fields"
 ```
@@ -856,14 +856,14 @@ fn launch_cli_agent_with_resume(
 - [ ] **Step 4.7: Compile check**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo check -p warp 2>&1 | grep "^error" | head -30
 ```
 
 Expected: only errors related to `select_previous`, `select_next`, `selected_item_action` (Menu API names to verify — adjust if the actual method names differ). To find correct method names:
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 grep -rn "fn select_prev\|fn select_next\|fn selected_item\|fn hovered_item" crates/ --include="*.rs" | head -20
 ```
 
@@ -872,7 +872,7 @@ Adjust calls to match actual API names in `Menu<T>`.
 - [ ] **Step 4.8: Commit**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 git add app/src/workspace/view.rs
 git commit -m "feat(workspace): add sessions sub-sidecar builder and execution"
 ```
@@ -970,7 +970,7 @@ self.hide_sessions_sub_sidecar(ctx);
 - [ ] **Step 5.4: Compile check**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo check -p warp 2>&1 | grep "^error" | head -20
 ```
 
@@ -979,7 +979,7 @@ Resolve any errors (likely the `into_submenu_fields()` API name, or borrow check
 - [ ] **Step 5.5: Commit**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 git add app/src/workspace/view.rs
 git commit -m "feat(workspace): wire directory hover to sessions sub-sidecar"
 ```
@@ -1047,7 +1047,7 @@ if self.show_sessions_sub_sidecar {
 - [ ] **Step 6.2: Full compile check**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo check -p warp 2>&1 | tail -20
 ```
 
@@ -1056,7 +1056,7 @@ Expected: zero errors. Warnings acceptable.
 - [ ] **Step 6.3: Run all relevant tests**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo test -p warp agent_session_reader cli_agent_tests 2>&1 | tail -20
 ```
 
@@ -1065,7 +1065,7 @@ Expected: all non-ignored tests PASS.
 - [ ] **Step 6.4: Build and manual smoke test**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 cargo build -p warp 2>&1 | tail -10
 ```
 
@@ -1082,7 +1082,7 @@ Then launch Warp from the worktree build, open the `+` menu, hover over Codex or
 - [ ] **Step 6.5: Commit**
 
 ```bash
-cd /Users/[redacted]/projects/own-projects/warp-worktrees/feat-remote-control
+cd /home/user/projects/warp-worktrees/feat-remote-control
 git add app/src/workspace/view.rs
 git commit -m "feat(workspace): render sessions sub-sidecar for CLI agent session resume"
 ```

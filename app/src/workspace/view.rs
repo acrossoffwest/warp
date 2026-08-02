@@ -11,6 +11,7 @@ pub(crate) mod left_panel;
 pub(crate) mod onboarding;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod right_panel;
+pub(crate) mod session_memory_board;
 mod startup_directory;
 #[cfg(test)]
 #[path = "view_tests.rs"]
