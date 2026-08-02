@@ -18,6 +18,7 @@ pub use persistence::schema;
 pub mod testing;
 
 use instant::Instant;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
@@ -123,6 +124,63 @@ pub struct WriterHandles {
     pub sender: SyncSender<ModelEvent>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionMemorySource {
+    WarpTerminal,
+    ClaudeCode,
+    Codex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionMemoryKind {
+    Terminal,
+    AgentChat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionMemoryStatus {
+    Live,
+    Blocked,
+    Success,
+    UserClosed,
+    Interrupted,
+    Stale,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentPermissionMode {
+    Normal,
+    Dangerous,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMemoryRecord {
+    pub id: String,
+    pub source: SessionMemorySource,
+    pub kind: SessionMemoryKind,
+    pub status: SessionMemoryStatus,
+    pub title: String,
+    pub summary: Option<String>,
+    pub cwd: Option<PathBuf>,
+    pub project: Option<String>,
+    pub native_session_id: Option<String>,
+    pub transcript_path: Option<PathBuf>,
+    pub terminal_pane_uuid: Option<Vec<u8>>,
+    pub app_window_fingerprint: Option<String>,
+    pub app_tab_fingerprint: Option<String>,
+    pub last_command: Option<String>,
+    pub last_exit_code: Option<i32>,
+    pub launch_argv: Option<Vec<String>>,
+    pub permission_mode: AgentPermissionMode,
+    pub last_seen_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub closed_intentionally_at: Option<i64>,
+    pub restore_payload: Option<serde_json::Value>,
+}
+
 /// Model for interacting with the writer thread.
 pub struct PersistenceWriter {
     thread_handle: Option<JoinHandle<()>>,
@@ -206,6 +264,8 @@ pub struct PersistedData {
     pub ignored_suggestions: Vec<(String, SuggestionType)>,
     pub mcp_server_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     pub mcp_servers_to_restore: Vec<Uuid>,
+    #[allow(dead_code)]
+    pub session_memory_records: Vec<SessionMemoryRecord>,
 }
 
 #[derive(Clone, Debug)]
@@ -392,5 +452,15 @@ pub enum ModelEvent {
         content: String,
         version: i32,
         title: String,
+    },
+    UpsertSessionMemoryRecord {
+        record: SessionMemoryRecord,
+    },
+    MarkSessionMemoryRecordClosed {
+        id: String,
+        closed_intentionally_at: i64,
+    },
+    DeleteSessionMemoryRecord {
+        id: String,
     },
 }

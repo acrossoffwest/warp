@@ -50,8 +50,9 @@ use super::model::{
 };
 use super::schema;
 use super::{
-    BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, PersistenceScope,
-    StartedCommandMetadata, WriterHandles,
+    AgentPermissionMode, BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData,
+    PersistenceScope, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    SessionMemoryStatus, StartedCommandMetadata, WriterHandles,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::scheduled::{
@@ -791,7 +792,214 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             title,
         } => save_ai_document_content(connection, &document_id, &content, version, &title)
             .context("error saving AI document content"),
+        ModelEvent::UpsertSessionMemoryRecord { record } => {
+            upsert_session_memory_record(connection, record)
+                .context("error upserting session memory record")
+        }
+        ModelEvent::MarkSessionMemoryRecordClosed {
+            id,
+            closed_intentionally_at,
+        } => mark_session_memory_record_closed(connection, &id, closed_intentionally_at)
+            .context("error marking session memory record closed"),
+        ModelEvent::DeleteSessionMemoryRecord { id } => {
+            delete_session_memory_record(connection, &id)
+                .context("error deleting session memory record")
+        }
     }
+}
+
+fn session_memory_source_to_db(source: SessionMemorySource) -> &'static str {
+    match source {
+        SessionMemorySource::WarpTerminal => "warp_terminal",
+        SessionMemorySource::ClaudeCode => "claude_code",
+        SessionMemorySource::Codex => "codex",
+    }
+}
+
+fn session_memory_source_from_db(source: &str) -> Option<SessionMemorySource> {
+    match source {
+        "warp_terminal" => Some(SessionMemorySource::WarpTerminal),
+        "claude_code" => Some(SessionMemorySource::ClaudeCode),
+        "codex" => Some(SessionMemorySource::Codex),
+        _ => None,
+    }
+}
+
+fn session_memory_kind_to_db(kind: SessionMemoryKind) -> &'static str {
+    match kind {
+        SessionMemoryKind::Terminal => "terminal",
+        SessionMemoryKind::AgentChat => "agent_chat",
+    }
+}
+
+fn session_memory_kind_from_db(kind: &str) -> Option<SessionMemoryKind> {
+    match kind {
+        "terminal" => Some(SessionMemoryKind::Terminal),
+        "agent_chat" => Some(SessionMemoryKind::AgentChat),
+        _ => None,
+    }
+}
+
+fn session_memory_status_to_db(status: SessionMemoryStatus) -> &'static str {
+    match status {
+        SessionMemoryStatus::Live => "live",
+        SessionMemoryStatus::Blocked => "blocked",
+        SessionMemoryStatus::Success => "success",
+        SessionMemoryStatus::UserClosed => "user_closed",
+        SessionMemoryStatus::Interrupted => "interrupted",
+        SessionMemoryStatus::Stale => "stale",
+        SessionMemoryStatus::Unknown => "unknown",
+    }
+}
+
+fn session_memory_status_from_db(status: &str) -> SessionMemoryStatus {
+    match status {
+        "live" => SessionMemoryStatus::Live,
+        "blocked" => SessionMemoryStatus::Blocked,
+        "success" => SessionMemoryStatus::Success,
+        "user_closed" => SessionMemoryStatus::UserClosed,
+        "interrupted" => SessionMemoryStatus::Interrupted,
+        "stale" => SessionMemoryStatus::Stale,
+        "unknown" => SessionMemoryStatus::Unknown,
+        _ => SessionMemoryStatus::Unknown,
+    }
+}
+
+fn agent_permission_mode_to_db(permission_mode: AgentPermissionMode) -> &'static str {
+    match permission_mode {
+        AgentPermissionMode::Normal => "normal",
+        AgentPermissionMode::Dangerous => "dangerous",
+        AgentPermissionMode::Unknown => "unknown",
+    }
+}
+
+fn agent_permission_mode_from_db(permission_mode: &str) -> AgentPermissionMode {
+    match permission_mode {
+        "normal" => AgentPermissionMode::Normal,
+        "dangerous" => AgentPermissionMode::Dangerous,
+        "unknown" => AgentPermissionMode::Unknown,
+        _ => AgentPermissionMode::Unknown,
+    }
+}
+
+fn session_memory_record_to_db(record: SessionMemoryRecord) -> Result<model::SessionMemoryRecord> {
+    Ok(model::SessionMemoryRecord {
+        id: record.id,
+        source: session_memory_source_to_db(record.source).to_string(),
+        kind: session_memory_kind_to_db(record.kind).to_string(),
+        status: session_memory_status_to_db(record.status).to_string(),
+        title: record.title,
+        summary: record.summary,
+        cwd: record.cwd.map(|path| path.to_string_lossy().into_owned()),
+        project: record.project,
+        native_session_id: record.native_session_id,
+        transcript_path: record
+            .transcript_path
+            .map(|path| path.to_string_lossy().into_owned()),
+        terminal_pane_uuid: record.terminal_pane_uuid,
+        app_window_fingerprint: record.app_window_fingerprint,
+        app_tab_fingerprint: record.app_tab_fingerprint,
+        last_command: record.last_command,
+        last_exit_code: record.last_exit_code,
+        launch_argv: record
+            .launch_argv
+            .map(|argv| serde_json::to_string(&argv))
+            .transpose()?,
+        permission_mode: agent_permission_mode_to_db(record.permission_mode).to_string(),
+        last_seen_at: record.last_seen_at,
+        started_at: record.started_at,
+        completed_at: record.completed_at,
+        closed_intentionally_at: record.closed_intentionally_at,
+        restore_payload: record
+            .restore_payload
+            .map(|payload| serde_json::to_string(&payload))
+            .transpose()?,
+    })
+}
+
+fn session_memory_record_from_db(row: model::SessionMemoryRecord) -> Option<SessionMemoryRecord> {
+    Some(SessionMemoryRecord {
+        id: row.id,
+        source: session_memory_source_from_db(&row.source)?,
+        kind: session_memory_kind_from_db(&row.kind)?,
+        status: session_memory_status_from_db(&row.status),
+        title: row.title,
+        summary: row.summary,
+        cwd: row.cwd.map(PathBuf::from),
+        project: row.project,
+        native_session_id: row.native_session_id,
+        transcript_path: row.transcript_path.map(PathBuf::from),
+        terminal_pane_uuid: row.terminal_pane_uuid,
+        app_window_fingerprint: row.app_window_fingerprint,
+        app_tab_fingerprint: row.app_tab_fingerprint,
+        last_command: row.last_command,
+        last_exit_code: row.last_exit_code,
+        launch_argv: row
+            .launch_argv
+            .as_deref()
+            .and_then(|argv| serde_json::from_str(argv).ok()),
+        permission_mode: agent_permission_mode_from_db(&row.permission_mode),
+        last_seen_at: row.last_seen_at,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+        closed_intentionally_at: row.closed_intentionally_at,
+        restore_payload: row
+            .restore_payload
+            .as_deref()
+            .and_then(|payload| serde_json::from_str(payload).ok()),
+    })
+}
+
+fn read_session_memory_records(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<SessionMemoryRecord>, Error> {
+    let records = schema::session_memory_records::dsl::session_memory_records
+        .order(schema::session_memory_records::dsl::last_seen_at.desc())
+        .load_iter::<model::SessionMemoryRecord, DefaultLoadingMode>(conn)?
+        .filter_map(|row| row.ok().and_then(session_memory_record_from_db))
+        .collect();
+    Ok(records)
+}
+
+fn upsert_session_memory_record(
+    conn: &mut SqliteConnection,
+    record: SessionMemoryRecord,
+) -> Result<()> {
+    let row = session_memory_record_to_db(record)?;
+    diesel::insert_into(schema::session_memory_records::dsl::session_memory_records)
+        .values(&row)
+        .on_conflict(schema::session_memory_records::dsl::id)
+        .do_update()
+        .set(&row)
+        .execute(conn)?;
+    Ok(())
+}
+
+fn mark_session_memory_record_closed(
+    conn: &mut SqliteConnection,
+    record_id: &str,
+    closed_at: i64,
+) -> Result<()> {
+    diesel::update(
+        schema::session_memory_records::dsl::session_memory_records
+            .filter(schema::session_memory_records::dsl::id.eq(record_id)),
+    )
+    .set((
+        schema::session_memory_records::dsl::closed_intentionally_at.eq(closed_at),
+        schema::session_memory_records::dsl::status
+            .eq(session_memory_status_to_db(SessionMemoryStatus::UserClosed)),
+    ))
+    .execute(conn)?;
+    Ok(())
+}
+
+fn delete_session_memory_record(conn: &mut SqliteConnection, record_id: &str) -> Result<()> {
+    diesel::delete(
+        schema::session_memory_records::dsl::session_memory_records
+            .filter(schema::session_memory_records::dsl::id.eq(record_id)),
+    )
+    .execute(conn)?;
+    Ok(())
 }
 
 /// Report a database error and additional context for debugging.
@@ -3292,6 +3500,7 @@ fn read_sqlite_data(
     let ignored_suggestions = get_all_ignored_suggestions(conn)?;
     let mcp_server_installations = get_all_mcp_server_installations(conn)?;
     let mcp_servers_to_restore = get_mcp_servers_to_restore(conn)?;
+    let session_memory_records = read_session_memory_records(conn)?;
 
     Ok(PersistedData {
         app_state,
@@ -3312,6 +3521,7 @@ fn read_sqlite_data(
         ignored_suggestions,
         mcp_server_installations,
         mcp_servers_to_restore,
+        session_memory_records,
     })
 }
 

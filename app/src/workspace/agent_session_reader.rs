@@ -300,7 +300,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn warp_dir() -> PathBuf {
-        PathBuf::from("/Users/[redacted]/projects/own-projects/warp")
+        PathBuf::from("/home/user/projects/warp")
     }
 
     #[test]

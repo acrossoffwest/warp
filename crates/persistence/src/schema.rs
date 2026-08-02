@@ -347,6 +347,33 @@ diesel::table! {
 }
 
 diesel::table! {
+    session_memory_records (id) {
+        id -> Text,
+        source -> Text,
+        kind -> Text,
+        status -> Text,
+        title -> Text,
+        summary -> Nullable<Text>,
+        cwd -> Nullable<Text>,
+        project -> Nullable<Text>,
+        native_session_id -> Nullable<Text>,
+        transcript_path -> Nullable<Text>,
+        terminal_pane_uuid -> Nullable<Binary>,
+        app_window_fingerprint -> Nullable<Text>,
+        app_tab_fingerprint -> Nullable<Text>,
+        last_command -> Nullable<Text>,
+        last_exit_code -> Nullable<Integer>,
+        launch_argv -> Nullable<Text>,
+        permission_mode -> Text,
+        last_seen_at -> BigInt,
+        started_at -> Nullable<BigInt>,
+        completed_at -> Nullable<BigInt>,
+        closed_intentionally_at -> Nullable<BigInt>,
+        restore_payload -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     settings_panes (id) {
         id -> Integer,
         kind -> Text,
