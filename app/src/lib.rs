@@ -74,6 +74,7 @@ mod safe_triangle;
 mod search_bar;
 mod server;
 mod session_management;
+pub(crate) mod session_memory;
 mod shell_indicator;
 mod suggestions;
 mod system;
