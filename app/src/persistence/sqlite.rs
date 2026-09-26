@@ -1025,7 +1025,8 @@ fn start_session_memory_app_run(conn: &mut SqliteConnection) -> Result<SessionMe
         current_run_id,
         previous_run_id,
         recoverable_run_id,
-    ))
+    )
+    .with_run_starts(started_at, previous_run.map(|run| run.started_at)))
 }
 
 fn mark_session_memory_app_run_clean(

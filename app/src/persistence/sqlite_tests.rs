@@ -1634,6 +1634,10 @@ fn session_memory_app_run_tracks_recoverable_previous_run() {
         Some(first_run.current_run_id.as_str())
     );
     assert_eq!(second_run.recoverable_run_id, None);
+    assert_eq!(
+        second_run.previous_run_started_at,
+        Some(first_run.current_run_started_at)
+    );
 
     let third_run =
         start_session_memory_app_run(&mut conn).expect("third session memory app run should start");

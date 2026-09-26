@@ -50,7 +50,7 @@ pub fn command_preview(command: Option<&str>) -> Option<String> {
     Some(preview)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SessionMemorySource {
     WarpTerminal,
     ClaudeCode,
@@ -96,6 +96,10 @@ pub struct SessionMemoryRunState {
     pub current_run_id: String,
     pub previous_run_id: Option<String>,
     pub recoverable_run_id: Option<String>,
+    #[serde(default)]
+    pub current_run_started_at: i64,
+    #[serde(default)]
+    pub previous_run_started_at: Option<i64>,
 }
 
 impl SessionMemoryRunState {
@@ -105,6 +109,8 @@ impl SessionMemoryRunState {
             current_run_id: current_run_id.into(),
             previous_run_id: recoverable_run_id.clone(),
             recoverable_run_id,
+            current_run_started_at: chrono::Utc::now().timestamp(),
+            previous_run_started_at: None,
         }
     }
 
@@ -117,7 +123,19 @@ impl SessionMemoryRunState {
             current_run_id: current_run_id.into(),
             previous_run_id,
             recoverable_run_id,
+            current_run_started_at: chrono::Utc::now().timestamp(),
+            previous_run_started_at: None,
         }
+    }
+
+    pub fn with_run_starts(
+        mut self,
+        current_run_started_at: i64,
+        previous_run_started_at: Option<i64>,
+    ) -> Self {
+        self.current_run_started_at = current_run_started_at;
+        self.previous_run_started_at = previous_run_started_at;
+        self
     }
 
     pub fn test_default() -> Self {

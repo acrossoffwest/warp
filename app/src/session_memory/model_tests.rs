@@ -7,6 +7,7 @@ use std::{
 use crate::persistence::ModelEvent;
 
 use super::model::{SessionMemoryModel, SessionMemoryModelEvent};
+use super::restore::RunBounds;
 use super::types::{
     AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemoryRunState,
     SessionMemorySource, SessionMemoryStatus,
@@ -425,6 +426,53 @@ fn previous_run_native_session_ids_collects_only_previous_run_ids() {
 
     assert!(ids.contains("previous-id"));
     assert!(!ids.contains("older-id"));
+}
+
+#[test]
+fn previous_run_ended_agent_records_include_completed_and_closed_agents_only() {
+    let mut ended = agent_record("ended-agent", "previous-run");
+    ended.completed_at = Some(150);
+    let mut closed = agent_record("closed-agent", "previous-run");
+    closed.closed_intentionally_at = Some(150);
+    let open = agent_record("open-agent", "previous-run");
+    let mut older = agent_record("older-agent", "older-run");
+    older.completed_at = Some(150);
+    let mut terminal = test_record("terminal");
+    terminal.source = SessionMemorySource::WarpTerminal;
+    terminal.kind = SessionMemoryKind::Terminal;
+    terminal.app_run_id = Some("previous-run".to_string());
+    terminal.completed_at = Some(150);
+    let model = model_with_previous_run(vec![ended, closed, open, older, terminal]);
+
+    let ids = model
+        .previous_run_ended_agent_records()
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(ids, vec!["ended-agent", "closed-agent"]);
+}
+
+#[test]
+fn run_bounds_come_from_run_state() {
+    let model = SessionMemoryModel::new_with_run_state(
+        vec![],
+        None,
+        SessionMemoryRunState::with_previous_run(
+            "current-run",
+            Some("previous-run".to_string()),
+            None,
+        )
+        .with_run_starts(500, Some(100)),
+    );
+
+    assert_eq!(
+        model.run_bounds(),
+        RunBounds {
+            previous_run_started_at: Some(100),
+            current_run_started_at: 500,
+        }
+    );
 }
 
 fn agent_record(id: &str, app_run_id: &str) -> SessionMemoryRecord {

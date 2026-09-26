@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use crate::session_memory::restore::AgentSessionFile;
+use crate::session_memory::types::is_valid_session_id;
 use crate::terminal::CLIAgent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +56,127 @@ pub fn source_version(agent: CLIAgent, directory: &Path) -> Option<std::time::Sy
     }
 }
 
+/// Cheap per-session start lookup for restore matching: skips sessions not
+/// modified since `modified_since` and reads each Claude file only up to its
+/// first user message.
+pub fn read_session_starts(
+    agent: CLIAgent,
+    directory: &Path,
+    modified_since: Option<i64>,
+) -> Vec<AgentSessionFile> {
+    match agent {
+        CLIAgent::Claude => claude_projects_dir()
+            .map(|projects_dir| {
+                read_claude_session_starts(&projects_dir, directory, modified_since)
+            })
+            .unwrap_or_default(),
+        CLIAgent::Codex => codex_db_path()
+            .map(|db_path| read_codex_session_starts(&db_path, directory, modified_since))
+            .unwrap_or_default(),
+        _ => vec![],
+    }
+}
+
+fn read_claude_session_starts(
+    projects_dir: &Path,
+    directory: &Path,
+    modified_since: Option<i64>,
+) -> Vec<AgentSessionFile> {
+    let Ok(entries) = std::fs::read_dir(projects_dir.join(claude_project_slug(directory))) else {
+        return vec![];
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                return None;
+            }
+            let session_id = path.file_stem()?.to_str()?.to_owned();
+            if !is_valid_session_id(&session_id) {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            let modified_at = unix_seconds(metadata.modified().ok()?);
+            if metadata.len() < 100 || modified_since.is_some_and(|since| modified_at < since) {
+                return None;
+            }
+            Some(AgentSessionFile {
+                session_id,
+                created_at: claude_first_user_message_at(&path)?,
+                modified_at,
+            })
+        })
+        .collect()
+}
+
+fn claude_first_user_message_at(path: &Path) -> Option<i64> {
+    use std::io::BufRead;
+
+    let reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+    reader
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| line.contains("\"user\""))
+        .find_map(|line| {
+            let value = serde_json::from_str::<serde_json::Value>(&line).ok()?;
+            if value.get("type").and_then(|t| t.as_str()) != Some("user") {
+                return None;
+            }
+            let timestamp = value.get("timestamp")?.as_str()?;
+            chrono::DateTime::parse_from_rfc3339(timestamp)
+                .ok()
+                .map(|dt| dt.timestamp())
+        })
+}
+
+fn unix_seconds(time: std::time::SystemTime) -> i64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+#[derive(diesel::QueryableByName, Debug)]
+struct CodexThreadStart {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    id: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    created_at: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    updated_at: i64,
+}
+
+fn read_codex_session_starts(
+    db_path: &Path,
+    directory: &Path,
+    modified_since: Option<i64>,
+) -> Vec<AgentSessionFile> {
+    use diesel::prelude::*;
+    use diesel::sqlite::SqliteConnection;
+
+    let Some(db_str) = db_path.to_str().map(|path| format!("file:{path}?mode=ro")) else {
+        return vec![];
+    };
+    let Ok(mut conn) = SqliteConnection::establish(&db_str) else {
+        return vec![];
+    };
+    diesel::sql_query(
+        "SELECT id, created_at, updated_at FROM threads \
+         WHERE cwd = ? AND updated_at >= ? AND first_user_message <> ''",
+    )
+    .bind::<diesel::sql_types::Text, _>(directory.to_string_lossy().into_owned())
+    .bind::<diesel::sql_types::BigInt, _>(modified_since.unwrap_or(i64::MIN))
+    .load::<CodexThreadStart>(&mut conn)
+    .unwrap_or_default()
+    .into_iter()
+    .map(|row| AgentSessionFile {
+        session_id: row.id,
+        created_at: row.created_at,
+        modified_at: row.updated_at,
+    })
+    .collect()
+}
+
 fn claude_projects_dir() -> Option<PathBuf> {
     if let Ok(home) = std::env::var("CLAUDE_HOME") {
         return Some(PathBuf::from(home).join("projects"));
@@ -65,7 +188,7 @@ fn claude_project_slug(directory: &Path) -> String {
     directory
         .to_string_lossy()
         .chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect()
 }
 
@@ -417,6 +540,131 @@ mod tests {
         assert_eq!(
             claude_project_slug(&path),
             "-Users-alice-projects-current-project-mr-assistant"
+        );
+    }
+
+    #[test]
+    fn claude_slug_replaces_every_non_alphanumeric_character() {
+        assert_eq!(
+            claude_project_slug(Path::new("/Users/alice/current.project/_infra")),
+            "-Users-alice-current-project--infra"
+        );
+        assert_eq!(
+            claude_project_slug(Path::new("/Users/alice/My Project/v1.2_x")),
+            "-Users-alice-My-Project-v1-2-x"
+        );
+        assert_eq!(
+            claude_project_slug(Path::new("/Users/alice/проект")),
+            "-Users-alice-------"
+        );
+    }
+
+    const SESSION_ID: &str = "0a0a0a0a-0000-4000-8000-00000000000a";
+
+    fn claude_session_dir(projects_dir: &Path, cwd: &Path) -> PathBuf {
+        let dir = projects_dir.join(claude_project_slug(cwd));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn claude_transcript(first_user_timestamp: Option<&str>) -> String {
+        let mut lines = vec![
+            r#"{"type":"permission-mode","permissionMode":"default","sessionId":"x"}"#.to_owned(),
+            r#"{"type":"attachment","userType":"external","timestamp":"2026-07-07T12:00:00Z"}"#
+                .to_owned(),
+        ];
+        if let Some(timestamp) = first_user_timestamp {
+            lines.push(format!(
+                r#"{{"type":"user","timestamp":"{timestamp}","message":{{"content":"hi"}}}}"#
+            ));
+        }
+        lines.push("not json at all".to_owned());
+        lines.join("\n")
+    }
+
+    #[test]
+    fn claude_session_starts_use_first_user_message_and_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = Path::new("/work/current.project/_infra");
+        let dir = claude_session_dir(tmp.path(), cwd);
+        std::fs::write(
+            dir.join(format!("{SESSION_ID}.jsonl")),
+            claude_transcript(Some("2026-07-07T12:34:56Z")),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("0b0b0b0b-0000-4000-8000-00000000000b.jsonl"),
+            claude_transcript(None),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("agent-1234.jsonl"),
+            claude_transcript(Some("2026-07-07T12:34:56Z")),
+        )
+        .unwrap();
+
+        let starts = read_claude_session_starts(tmp.path(), cwd, None);
+
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0].session_id, SESSION_ID);
+        assert_eq!(
+            starts[0].created_at,
+            chrono::DateTime::parse_from_rfc3339("2026-07-07T12:34:56Z")
+                .unwrap()
+                .timestamp()
+        );
+        assert!(starts[0].modified_at >= starts[0].created_at);
+    }
+
+    #[test]
+    fn claude_session_starts_skip_files_not_modified_since_floor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = Path::new("/work/project");
+        let dir = claude_session_dir(tmp.path(), cwd);
+        std::fs::write(
+            dir.join(format!("{SESSION_ID}.jsonl")),
+            claude_transcript(Some("2026-07-07T12:34:56Z")),
+        )
+        .unwrap();
+        let future = chrono::Utc::now().timestamp() + 3600;
+
+        assert!(read_claude_session_starts(tmp.path(), cwd, Some(future)).is_empty());
+    }
+
+    #[test]
+    fn codex_session_starts_come_from_threads_rows() {
+        use diesel::prelude::*;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("state_5.sqlite");
+        let mut conn = diesel::sqlite::SqliteConnection::establish(db_path.to_str().unwrap())
+            .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, \
+             updated_at INTEGER NOT NULL, cwd TEXT NOT NULL, \
+             first_user_message TEXT NOT NULL DEFAULT '')",
+        )
+        .execute(&mut conn)
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO threads VALUES \
+             ('0a0a0a0a-0000-4000-8000-00000000000a', 100, 500, '/work/project', 'hi'), \
+             ('0b0b0b0b-0000-4000-8000-00000000000b', 100, 500, '/work/other', 'hi'), \
+             ('0c0c0c0c-0000-4000-8000-00000000000c', 10, 20, '/work/project', 'hi'), \
+             ('0d0d0d0d-0000-4000-8000-00000000000d', 100, 500, '/work/project', '')",
+        )
+        .execute(&mut conn)
+        .unwrap();
+
+        let starts = read_codex_session_starts(&db_path, Path::new("/work/project"), Some(50));
+
+        assert_eq!(
+            starts,
+            vec![AgentSessionFile {
+                session_id: SESSION_ID.to_owned(),
+                created_at: 100,
+                modified_at: 500,
+            }]
         );
     }
 

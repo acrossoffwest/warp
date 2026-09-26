@@ -1,9 +1,10 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::restore::{
-    AgentSessionFile, RestoreError, StartupRestoreSkip, StartupRestoreTarget, agent_restore_plan,
-    match_session_file, plan_startup_restore, resolve_missing_session_ids, restore_plan_for_record,
+    AgentFolder, AgentSessionFile, RestoreError, RunBounds, StartupRestoreSkip,
+    StartupRestoreTarget, agent_restore_plan, match_session_file, plan_startup_restore,
+    resolve_missing_session_ids, restore_plan_for_record, session_file_mtime_floor,
     startup_agent_restore_plan, terminal_restore_plan,
 };
 use super::types::{
@@ -287,7 +288,7 @@ fn startup_plan_resumes_claude_with_id_and_dangerous_flag() {
         AgentPermissionMode::Dangerous,
     );
 
-    let plan = startup_agent_restore_plan(&record).expect("plan should be built");
+    let plan = startup_agent_restore_plan(&record, true).expect("plan should be built");
 
     assert_eq!(
         plan.command(),
@@ -306,7 +307,7 @@ fn startup_plan_continues_claude_without_id() {
         AgentPermissionMode::Dangerous,
     );
 
-    let plan = startup_agent_restore_plan(&record).expect("plan should be built");
+    let plan = startup_agent_restore_plan(&record, true).expect("plan should be built");
 
     assert_eq!(
         plan.command(),
@@ -324,7 +325,7 @@ fn startup_plan_continues_claude_when_stored_id_is_not_a_uuid() {
         AgentPermissionMode::Normal,
     );
 
-    let plan = startup_agent_restore_plan(&record).expect("plan should be built");
+    let plan = startup_agent_restore_plan(&record, true).expect("plan should be built");
 
     assert_eq!(plan.command(), Some("claude --continue"));
 }
@@ -339,7 +340,7 @@ fn startup_plan_resumes_last_codex_without_id() {
         AgentPermissionMode::Normal,
     );
 
-    let plan = startup_agent_restore_plan(&record).expect("plan should be built");
+    let plan = startup_agent_restore_plan(&record, true).expect("plan should be built");
 
     assert_eq!(plan.command(), Some("codex resume --last"));
 }
@@ -354,7 +355,7 @@ fn startup_plan_resumes_codex_with_id() {
         AgentPermissionMode::Unknown,
     );
 
-    let plan = startup_agent_restore_plan(&record).expect("plan should be built");
+    let plan = startup_agent_restore_plan(&record, true).expect("plan should be built");
 
     assert_eq!(
         plan.command(),
@@ -373,7 +374,7 @@ fn startup_plan_rejects_missing_cwd() {
     );
 
     assert_eq!(
-        startup_agent_restore_plan(&record),
+        startup_agent_restore_plan(&record, true),
         Err(RestoreError::MissingWorkingDirectory(missing))
     );
 }
@@ -403,7 +404,7 @@ fn startup_restore_targets_panes_across_two_windows() {
         ("window-b", vec![2]),
     ];
 
-    let targets = plan_startup_restore(&[first, second], &restored, true);
+    let targets = plan_with_continue(&[first, second], &restored, true);
 
     let target_of = |id: &str| {
         targets
@@ -455,7 +456,7 @@ fn startup_restore_skips_missing_pane_when_layout_restore_is_on() {
     );
     record.terminal_pane_uuid = Some(vec![7]);
 
-    let targets = plan_startup_restore(&[record], &[("window-a", vec![1])], true);
+    let targets = plan_with_continue(&[record], &[("window-a", vec![1])], true);
 
     assert_eq!(
         targets[0].1,
@@ -474,7 +475,7 @@ fn startup_restore_opens_new_tab_when_layout_restore_is_off() {
     );
     record.terminal_pane_uuid = Some(vec![7]);
 
-    let targets = plan_startup_restore::<&str>(&[record], &[], false);
+    let targets = plan_with_continue::<&str>(&[record], &[], false);
 
     match &targets[0].1 {
         StartupRestoreTarget::NewTab { plan } => {
@@ -506,7 +507,7 @@ fn startup_restore_continues_only_newest_idless_candidate_per_cwd() {
     newer.last_seen_at = 200;
     let restored = vec![("window-a", vec![1]), ("window-a", vec![2])];
 
-    let targets = plan_startup_restore(&[older, newer], &restored, true);
+    let targets = plan_with_continue(&[older, newer], &restored, true);
 
     let target_of = |id: &str| {
         targets
@@ -578,7 +579,7 @@ fn resolve_missing_session_ids_does_not_assign_one_file_to_two_panes() {
     with_id.native_session_id = Some(SESSION_TAKEN.to_string());
     let mut candidates = vec![second, first, with_id];
 
-    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
+    resolve(&mut candidates, &[], |_, _| {
         vec![
             session_file(SESSION_TAKEN, 100),
             session_file(SESSION_A, 101),
@@ -610,7 +611,7 @@ fn resolve_missing_session_ids_ignores_files_without_uuid_ids() {
     record.last_seen_at = 1000;
     let mut candidates = vec![record];
 
-    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
+    resolve(&mut candidates, &[], |_, _| {
         vec![
             session_file("not-a-uuid", 101),
             session_file(SESSION_A, 102),
@@ -651,7 +652,7 @@ fn resolve_missing_session_ids_uses_completed_at_as_upper_bound() {
     record.last_seen_at = 1000;
     let mut candidates = vec![record];
 
-    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
+    resolve(&mut candidates, &[], |_, _| {
         vec![session_file(SESSION_A, 200)]
     });
 
@@ -659,7 +660,7 @@ fn resolve_missing_session_ids_uses_completed_at_as_upper_bound() {
 }
 
 #[test]
-fn resolve_missing_session_ids_does_not_match_file_created_after_last_seen() {
+fn resolve_missing_session_ids_matches_file_created_after_record_was_last_written() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let mut record = startup_agent(
         tempdir.path().to_path_buf(),
@@ -668,14 +669,259 @@ fn resolve_missing_session_ids_does_not_match_file_created_after_last_seen() {
         AgentPermissionMode::Normal,
     );
     record.started_at = Some(100);
-    record.last_seen_at = 200;
+    record.last_seen_at = 100;
     let mut candidates = vec![record];
 
-    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
-        vec![session_file(SESSION_A, 201)]
+    resolve(&mut candidates, &[], |_, _| vec![session_file(SESSION_A, 201)]);
+
+    assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_A));
+}
+
+#[test]
+fn resolve_missing_session_ids_ignores_files_created_after_current_run_started() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut record = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    record.started_at = Some(100);
+    let mut candidates = vec![record];
+
+    resolve(&mut candidates, &[], |_, _| {
+        vec![session_file(SESSION_A, CURRENT_RUN_STARTED_AT + 1)]
     });
 
     assert_eq!(candidates[0].native_session_id, None);
+}
+
+#[test]
+fn resolve_missing_session_ids_lets_exited_pane_claim_its_file_first() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut live = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    live.id = "live".to_string();
+    live.started_at = Some(100);
+    let mut exited = live.clone();
+    exited.id = "exited".to_string();
+    exited.started_at = Some(105);
+    exited.completed_at = Some(200);
+    let mut candidates = vec![live];
+
+    resolve(&mut candidates, &[exited], |_, _| {
+        vec![session_file(SESSION_A, 106), session_file(SESSION_B, 300)]
+    });
+
+    assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_B));
+}
+
+#[test]
+fn resolve_missing_session_ids_reads_each_folder_once() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut first = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    first.started_at = Some(100);
+    let mut second = first.clone();
+    second.id = "second".to_string();
+    second.started_at = Some(110);
+    let mut candidates = vec![first, second];
+    let mut reads = 0;
+
+    resolve(&mut candidates, &[], |_, _| {
+        reads += 1;
+        vec![session_file(SESSION_A, 101)]
+    });
+
+    assert_eq!(reads, 1);
+}
+
+#[test]
+fn continue_is_allowed_when_newest_file_of_previous_run_is_unclaimed() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut candidates = vec![startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    )];
+
+    let folders = resolve(&mut candidates, &[], |_, _| {
+        vec![session_file_modified(SESSION_A, 60, 700)]
+    });
+
+    assert!(folders.contains(&(SessionMemorySource::ClaudeCode, tempdir.path().to_path_buf())));
+}
+
+#[test]
+fn continue_is_refused_when_newest_file_belongs_to_another_pane() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut idless = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Dangerous,
+    );
+    idless.id = "idless".to_string();
+    idless.terminal_pane_uuid = Some(vec![1]);
+    let mut other = idless.clone();
+    other.id = "other".to_string();
+    other.terminal_pane_uuid = Some(vec![2]);
+    other.started_at = Some(100);
+    let mut candidates = vec![idless, other];
+
+    let folders = resolve(&mut candidates, &[], |_, _| {
+        vec![
+            session_file_modified(SESSION_A, 60, 300),
+            session_file_modified(SESSION_B, 101, 900),
+        ]
+    });
+    let targets = plan_startup_restore(
+        &candidates,
+        &[("window-a", vec![1]), ("window-a", vec![2])],
+        true,
+        &folders,
+        Path::to_path_buf,
+    );
+
+    assert_eq!(candidates[1].native_session_id.as_deref(), Some(SESSION_B));
+    assert!(folders.is_empty());
+    let idless_target = targets
+        .iter()
+        .find(|(id, _)| id == "idless")
+        .map(|(_, target)| target.clone());
+    match idless_target {
+        Some(StartupRestoreTarget::ExistingPane { plan, .. }) => {
+            assert_eq!(plan.command(), Some("claude --dangerously-skip-permissions"));
+        }
+        other => panic!("expected existing pane, got {other:?}"),
+    }
+}
+
+#[test]
+fn continue_is_refused_when_newest_file_predates_previous_run() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut candidates = vec![startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::Codex,
+        None,
+        AgentPermissionMode::Normal,
+    )];
+
+    let folders = resolve(&mut candidates, &[], |_, _| {
+        vec![session_file_modified(SESSION_A, 10, PREVIOUS_RUN_STARTED_AT - 1)]
+    });
+
+    assert!(folders.is_empty());
+}
+
+#[test]
+fn continue_is_refused_without_session_files() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut candidates = vec![startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::Codex,
+        None,
+        AgentPermissionMode::Normal,
+    )];
+
+    let folders = resolve(&mut candidates, &[], |_, _| Vec::new());
+
+    assert!(folders.is_empty());
+}
+
+#[test]
+fn startup_plan_starts_fresh_agent_when_continue_is_not_allowed() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let claude = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Dangerous,
+    );
+    let codex = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::Codex,
+        None,
+        AgentPermissionMode::Normal,
+    );
+
+    assert_eq!(
+        startup_agent_restore_plan(&claude, false)
+            .expect("plan should be built")
+            .command(),
+        Some("claude --dangerously-skip-permissions")
+    );
+    assert_eq!(
+        startup_agent_restore_plan(&codex, false)
+            .expect("plan should be built")
+            .command(),
+        Some("codex")
+    );
+}
+
+#[test]
+fn startup_restore_continue_slot_uses_canonical_folder() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut newer = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    newer.id = "newer".to_string();
+    newer.terminal_pane_uuid = Some(vec![1]);
+    newer.last_seen_at = 200;
+    let mut older = newer.clone();
+    older.id = "older".to_string();
+    older.cwd = Some(tempdir.path().join("."));
+    older.terminal_pane_uuid = Some(vec![2]);
+    older.last_seen_at = 100;
+    let folders = HashSet::from([(SessionMemorySource::ClaudeCode, tempdir.path().to_path_buf())]);
+
+    let targets = plan_startup_restore(
+        &[newer, older],
+        &[("window-a", vec![1]), ("window-a", vec![2])],
+        true,
+        &folders,
+        |path: &Path| path.components().collect(),
+    );
+
+    assert_eq!(
+        targets[1],
+        (
+            "older".to_string(),
+            StartupRestoreTarget::Skip(StartupRestoreSkip::DuplicateContinue)
+        )
+    );
+}
+
+#[test]
+fn session_file_mtime_floor_uses_earliest_start_and_previous_run() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut record = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    record.started_at = Some(100);
+    let bounds = |previous_run_started_at| RunBounds {
+        previous_run_started_at,
+        current_run_started_at: CURRENT_RUN_STARTED_AT,
+    };
+
+    assert_eq!(session_file_mtime_floor([&record], bounds(Some(50))), Some(48));
+    assert_eq!(session_file_mtime_floor([&record], bounds(Some(500))), Some(98));
+    assert_eq!(session_file_mtime_floor([], bounds(None)), None);
 }
 
 #[test]
@@ -691,7 +937,7 @@ fn resolve_missing_session_ids_replaces_non_uuid_stored_id_from_file() {
     record.last_seen_at = 1000;
     let mut candidates = vec![record];
 
-    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
+    resolve(&mut candidates, &[], |_, _| {
         vec![session_file(SESSION_A, 101)]
     });
 
@@ -708,7 +954,7 @@ fn startup_plan_resumes_last_codex_with_dangerous_flag() {
         AgentPermissionMode::Dangerous,
     );
 
-    let plan = startup_agent_restore_plan(&record).expect("plan should be built");
+    let plan = startup_agent_restore_plan(&record, true).expect("plan should be built");
 
     assert_eq!(
         plan.command(),
@@ -726,7 +972,7 @@ fn startup_restore_opens_new_tab_without_pane_uuid_when_layout_restore_is_off() 
         AgentPermissionMode::Normal,
     );
 
-    let targets = plan_startup_restore(&[record], &[("window-a", vec![1])], false);
+    let targets = plan_with_continue(&[record], &[("window-a", vec![1])], false);
 
     match &targets[0].1 {
         StartupRestoreTarget::NewTab { plan } => {
@@ -755,7 +1001,7 @@ fn startup_restore_record_with_id_does_not_consume_continue_slot() {
     idless.last_seen_at = 100;
     let restored = vec![("window-a", vec![1]), ("window-a", vec![2])];
 
-    let targets = plan_startup_restore(&[with_id, idless], &restored, true);
+    let targets = plan_with_continue(&[with_id, idless], &restored, true);
 
     assert!(
         targets
@@ -790,7 +1036,7 @@ fn startup_restore_continues_idless_records_with_different_source_or_cwd() {
         ("window-b", vec![3]),
     ];
 
-    let targets = plan_startup_restore(&[claude, codex, other_folder], &restored, true);
+    let targets = plan_with_continue(&[claude, codex, other_folder], &restored, true);
 
     assert_eq!(targets.len(), 3);
     assert!(
@@ -811,12 +1057,57 @@ fn startup_agent(
     record.native_session_id = session_id.map(str::to_owned);
     record.permission_mode = permission_mode;
     record.status = SessionMemoryStatus::Interrupted;
+    record.started_at = None;
     record
 }
 
+const PREVIOUS_RUN_STARTED_AT: i64 = 50;
+const CURRENT_RUN_STARTED_AT: i64 = 1000;
+
+fn resolve(
+    candidates: &mut [SessionMemoryRecord],
+    ended: &[SessionMemoryRecord],
+    session_files: impl FnMut(SessionMemorySource, &Path) -> Vec<AgentSessionFile>,
+) -> HashSet<AgentFolder> {
+    resolve_missing_session_ids(
+        candidates,
+        ended,
+        HashSet::new(),
+        RunBounds {
+            previous_run_started_at: Some(PREVIOUS_RUN_STARTED_AT),
+            current_run_started_at: CURRENT_RUN_STARTED_AT,
+        },
+        Path::to_path_buf,
+        session_files,
+    )
+}
+
+fn plan_with_continue<W: Clone>(
+    candidates: &[SessionMemoryRecord],
+    restored_panes: &[(W, Vec<u8>)],
+    layout_restore_enabled: bool,
+) -> Vec<(String, StartupRestoreTarget<W>)> {
+    let folders = candidates
+        .iter()
+        .filter_map(|record| Some((record.source, record.cwd.clone()?)))
+        .collect();
+    plan_startup_restore(
+        candidates,
+        restored_panes,
+        layout_restore_enabled,
+        &folders,
+        Path::to_path_buf,
+    )
+}
+
 fn session_file(session_id: &str, created_at: i64) -> AgentSessionFile {
+    session_file_modified(session_id, created_at, created_at)
+}
+
+fn session_file_modified(session_id: &str, created_at: i64, modified_at: i64) -> AgentSessionFile {
     AgentSessionFile {
         session_id: session_id.to_string(),
         created_at,
+        modified_at,
     }
 }

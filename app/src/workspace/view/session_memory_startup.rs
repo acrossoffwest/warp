@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use warpui::{AppContext, SingletonEntity};
@@ -6,7 +5,8 @@ use warpui::{AppContext, SingletonEntity};
 use crate::app_state::AppState;
 use crate::session_memory::model::SessionMemoryModel;
 use crate::session_memory::restore::{
-    AgentSessionFile, StartupRestoreTarget, plan_startup_restore, resolve_missing_session_ids,
+    StartupRestoreTarget, plan_startup_restore, resolve_missing_session_ids,
+    session_file_mtime_floor,
 };
 use crate::session_memory::types::SessionMemorySource;
 use crate::settings::AISettings;
@@ -33,16 +33,21 @@ pub(crate) fn restore_open_agent_sessions(layout_restored: bool, ctx: &mut AppCo
         return;
     }
     let claimed = session_memory.previous_run_native_session_ids();
-    let mut session_files_by_cwd = HashMap::new();
-    resolve_missing_session_ids(&mut candidates, claimed, |source, cwd| {
-        let Some(agent) = session_agent(source) else {
-            return Vec::new();
-        };
-        session_files_by_cwd
-            .entry((agent, agent_lookup_cwd(cwd)))
-            .or_insert_with_key(|(agent, cwd)| agent_session_files(*agent, cwd))
-            .clone()
-    });
+    let ended = session_memory.previous_run_ended_agent_records();
+    let bounds = session_memory.run_bounds();
+    let modified_since = session_file_mtime_floor(candidates.iter().chain(&ended), bounds);
+    let continue_folders = resolve_missing_session_ids(
+        &mut candidates,
+        &ended,
+        claimed,
+        bounds,
+        agent_lookup_cwd,
+        |source, cwd| {
+            session_agent(source)
+                .map(|agent| agent_session_reader::read_session_starts(agent, cwd, modified_since))
+                .unwrap_or_default()
+        },
+    );
 
     let restored_panes = workspaces
         .into_iter()
@@ -65,7 +70,13 @@ pub(crate) fn restore_open_agent_sessions(layout_restored: bool, ctx: &mut AppCo
         .map(|record| record.id.clone())
         .collect::<Vec<_>>();
 
-    for (record_id, target) in plan_startup_restore(&candidates, &restored_panes, layout_restored) {
+    for (record_id, target) in plan_startup_restore(
+        &candidates,
+        &restored_panes,
+        layout_restored,
+        &continue_folders,
+        agent_lookup_cwd,
+    ) {
         let (window_id, terminal_pane_uuid, plan) = match target {
             StartupRestoreTarget::ExistingPane {
                 window,
@@ -116,16 +127,6 @@ fn session_agent(source: SessionMemorySource) -> Option<CLIAgent> {
         SessionMemorySource::Codex => Some(CLIAgent::Codex),
         SessionMemorySource::WarpTerminal => None,
     }
-}
-
-fn agent_session_files(agent: CLIAgent, cwd: &Path) -> Vec<AgentSessionFile> {
-    agent_session_reader::read_all_sessions(agent, cwd)
-        .into_iter()
-        .map(|entry| AgentSessionFile {
-            session_id: entry.session_id,
-            created_at: entry.created_at,
-        })
-        .collect()
 }
 
 fn agent_lookup_cwd(cwd: &Path) -> PathBuf {

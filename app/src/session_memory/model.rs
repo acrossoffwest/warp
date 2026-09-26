@@ -6,6 +6,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::{self, ModelEvent};
 
+use super::restore::RunBounds;
 use super::types::{SessionMemoryRecord, SessionMemoryRunState, SessionMemoryStatus};
 
 pub type SessionMemoryEventSink = Arc<dyn Fn(SessionMemoryModelEvent) + Send + Sync + 'static>;
@@ -163,6 +164,28 @@ impl SessionMemoryModel {
             }
         }
         candidates
+    }
+
+    pub fn previous_run_ended_agent_records(&self) -> Vec<SessionMemoryRecord> {
+        let Some(previous_run_id) = self.run_state.previous_run_id.as_deref() else {
+            return Vec::new();
+        };
+        self.records
+            .iter()
+            .filter(|record| {
+                record.is_agent()
+                    && record.app_run_id.as_deref() == Some(previous_run_id)
+                    && (record.completed_at.is_some() || record.closed_intentionally_at.is_some())
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn run_bounds(&self) -> RunBounds {
+        RunBounds {
+            previous_run_started_at: self.run_state.previous_run_started_at,
+            current_run_started_at: self.run_state.current_run_started_at,
+        }
     }
 
     pub fn previous_run_native_session_ids(&self) -> HashSet<String> {
