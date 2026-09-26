@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::Shutdown;
 use std::os::fd::AsRawFd;
@@ -24,7 +25,7 @@ const MAX_SOCKET_PATH_LEN: usize = 103;
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-type Connections = Arc<Mutex<Vec<UnixStream>>>;
+type Connections = Arc<Mutex<HashMap<u64, UnixStream>>>;
 
 pub struct Server {
     path: PathBuf,
@@ -76,7 +77,7 @@ impl Server {
         let (dev, ino) = (metadata.dev(), metadata.ino());
 
         let stop = Arc::new(AtomicBool::new(false));
-        let connections: Connections = Arc::new(Mutex::new(Vec::new()));
+        let connections: Connections = Arc::new(Mutex::new(HashMap::new()));
         let thread_stop = stop.clone();
         let thread_connections = connections.clone();
         let accept_thread = std::thread::Builder::new()
@@ -97,13 +98,18 @@ impl Server {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    #[cfg(test)]
+    fn live_connection_count(&self) -> usize {
+        self.connections.lock().map(|c| c.len()).unwrap_or(0)
+    }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Ok(connections) = self.connections.lock() {
-            for stream in connections.iter() {
+            for stream in connections.values() {
                 let _ = stream.shutdown(Shutdown::Both);
             }
         }
@@ -125,6 +131,7 @@ fn accept_loop(
     stop: Arc<AtomicBool>,
     connections: Connections,
 ) {
+    let mut next_id: u64 = 0;
     loop {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -140,16 +147,35 @@ fn accept_loop(
                     continue;
                 }
                 let Ok(registered) = stream.try_clone() else { continue };
+                let id = next_id;
+                next_id += 1;
                 if let Ok(mut connections) = connections.lock() {
-                    connections.push(registered);
+                    connections.insert(id, registered);
+                }
+                if stop.load(Ordering::SeqCst) {
+                    if let Ok(mut connections) = connections.lock()
+                        && let Some(registered) = connections.remove(&id)
+                    {
+                        let _ = registered.shutdown(Shutdown::Both);
+                    }
+                    continue;
                 }
                 let handler = handler.clone();
                 let conn_stop = stop.clone();
-                if let Err(error) = std::thread::Builder::new()
+                let conn_connections = connections.clone();
+                let spawned = std::thread::Builder::new()
                     .name("fork-control-conn".into())
-                    .spawn(move || serve_connection(stream, handler, conn_stop))
-                {
+                    .spawn(move || {
+                        serve_connection(stream, handler, conn_stop);
+                        if let Ok(mut connections) = conn_connections.lock() {
+                            connections.remove(&id);
+                        }
+                    });
+                if let Err(error) = spawned {
                     log::warn!("fork_control: failed to spawn connection thread: {error}");
+                    if let Ok(mut connections) = connections.lock() {
+                        connections.remove(&id);
+                    }
                 }
             }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {

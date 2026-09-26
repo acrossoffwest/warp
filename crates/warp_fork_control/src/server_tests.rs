@@ -152,3 +152,27 @@ fn refuses_to_remove_non_socket_file() {
     assert!(Server::start(&path, echo_handler()).is_err());
     assert!(path.exists());
 }
+
+#[test]
+fn closed_connections_leave_the_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(&socket_in(&dir), echo_handler()).unwrap();
+
+    for _ in 0..3 {
+        let mut stream = UnixStream::connect(server.path()).unwrap();
+        roundtrip(&mut stream, r#"{"method":"ping"}"#);
+        drop(stream);
+    }
+
+    const ATTEMPTS: u32 = 200;
+    for attempt in 0..ATTEMPTS {
+        let count = server.live_connection_count();
+        if count == 0 {
+            return;
+        }
+        if attempt + 1 == ATTEMPTS {
+            panic!("registry still has {count} live connections");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
