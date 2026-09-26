@@ -210,6 +210,36 @@ impl SessionMemoryRecord {
         self.permission_mode = agent_command.permission_mode;
     }
 
+    pub fn is_agent(&self) -> bool {
+        matches!(
+            self.source,
+            SessionMemorySource::ClaudeCode | SessionMemorySource::Codex
+        )
+    }
+
+    pub fn keep_agent_end(
+        &mut self,
+        existing_started_at: Option<i64>,
+        existing_completed_at: Option<i64>,
+    ) {
+        let Some(completed_at) = existing_completed_at else {
+            return;
+        };
+        if self.completed_at.is_some() {
+            return;
+        }
+        let new_agent_started = self.is_agent()
+            && self.started_at.is_some()
+            && self.started_at != existing_started_at;
+        if new_agent_started {
+            return;
+        }
+        self.completed_at = Some(completed_at);
+        if self.is_agent() {
+            self.status = SessionMemoryStatus::Success;
+        }
+    }
+
     pub fn is_interrupted(&self) -> bool {
         self.status == SessionMemoryStatus::Interrupted
     }

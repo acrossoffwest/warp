@@ -1317,6 +1317,121 @@ fn session_memory_record_upsert_clears_previously_set_optional_fields() {
 }
 
 #[test]
+fn session_memory_agent_end_survives_later_snapshot_upsert() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let record = session_memory_agent_record(Some(100));
+
+    upsert_session_memory(&mut conn, record.clone());
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id.clone(),
+            started_at: 100,
+            completed_at: 150,
+        },
+        &mut conn,
+    )
+    .expect("agent end should be written");
+    upsert_session_memory(&mut conn, record);
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.completed_at, Some(150));
+    assert_eq!(stored.status, SessionMemoryStatus::Success);
+}
+
+#[test]
+fn session_memory_new_agent_start_clears_previous_end() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let record = session_memory_agent_record(Some(100));
+
+    upsert_session_memory(&mut conn, record.clone());
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id.clone(),
+            started_at: 100,
+            completed_at: 150,
+        },
+        &mut conn,
+    )
+    .expect("agent end should be written");
+    upsert_session_memory(&mut conn, session_memory_agent_record(Some(200)));
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.completed_at, None);
+    assert_eq!(stored.status, SessionMemoryStatus::Live);
+}
+
+#[test]
+fn session_memory_agent_end_ignores_other_block_start() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let record = session_memory_agent_record(Some(100));
+
+    upsert_session_memory(&mut conn, record.clone());
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id,
+            started_at: 99,
+            completed_at: 150,
+        },
+        &mut conn,
+    )
+    .expect("agent end event should be handled");
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.completed_at, None);
+    assert_eq!(stored.status, SessionMemoryStatus::Live);
+}
+
+fn session_memory_agent_record(started_at: Option<i64>) -> SessionMemoryRecord {
+    SessionMemoryRecord {
+        id: "warp_terminal:AQIDBA==".to_string(),
+        source: SessionMemorySource::ClaudeCode,
+        kind: SessionMemoryKind::AgentChat,
+        status: SessionMemoryStatus::Live,
+        title: "claude".to_string(),
+        summary: None,
+        cwd: Some(PathBuf::from("/tmp/warp-session-memory-test")),
+        project: None,
+        native_session_id: Some("abc".to_string()),
+        transcript_path: None,
+        terminal_pane_uuid: Some(vec![1, 2, 3, 4]),
+        app_window_fingerprint: None,
+        app_tab_fingerprint: None,
+        last_command: Some("claude --resume abc".to_string()),
+        last_exit_code: None,
+        launch_argv: None,
+        permission_mode: AgentPermissionMode::Normal,
+        last_seen_at: 160,
+        started_at,
+        completed_at: None,
+        closed_intentionally_at: None,
+        app_run_id: Some("current-run".to_string()),
+        recovery_offered_run_id: None,
+        restore_payload: None,
+    }
+}
+
+fn upsert_session_memory(conn: &mut diesel::sqlite::SqliteConnection, record: SessionMemoryRecord) {
+    handle_model_event(ModelEvent::UpsertSessionMemoryRecord { record }, conn)
+        .expect("session memory record should upsert");
+}
+
+fn read_single_session_memory_record(
+    conn: &mut diesel::sqlite::SqliteConnection,
+) -> SessionMemoryRecord {
+    read_sqlite_data(conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .session_memory_records
+        .pop()
+        .expect("record should exist")
+}
+
+#[test]
 fn session_memory_app_run_tracks_recoverable_previous_run() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");

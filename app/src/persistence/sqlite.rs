@@ -884,6 +884,12 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             closed_intentionally_at,
         } => mark_session_memory_record_closed(connection, &id, closed_intentionally_at)
             .context("error marking session memory record closed"),
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id,
+            started_at,
+            completed_at,
+        } => mark_session_memory_agent_ended(connection, &id, started_at, completed_at)
+            .context("error marking session memory agent ended"),
         ModelEvent::DeleteSessionMemoryRecord { id } => {
             delete_session_memory_record(connection, &id)
                 .context("error deleting session memory record")
@@ -1096,8 +1102,20 @@ fn read_session_memory_records(
 
 fn upsert_session_memory_record(
     conn: &mut SqliteConnection,
-    record: SessionMemoryRecord,
+    mut record: SessionMemoryRecord,
 ) -> Result<()> {
+    let existing = schema::session_memory_records::dsl::session_memory_records
+        .filter(schema::session_memory_records::dsl::id.eq(&record.id))
+        .select((
+            schema::session_memory_records::dsl::started_at,
+            schema::session_memory_records::dsl::completed_at,
+        ))
+        .first::<(Option<i64>, Option<i64>)>(conn)
+        .optional()?;
+    if let Some((existing_started_at, existing_completed_at)) = existing {
+        record.keep_agent_end(existing_started_at, existing_completed_at);
+    }
+
     let row = session_memory_record_to_db(record)?;
     diesel::insert_into(schema::session_memory_records::dsl::session_memory_records)
         .values(&row)
@@ -1121,6 +1139,31 @@ fn mark_session_memory_record_closed(
         schema::session_memory_records::dsl::closed_intentionally_at.eq(closed_at),
         schema::session_memory_records::dsl::status
             .eq(session_memory_status_to_db(SessionMemoryStatus::UserClosed)),
+    ))
+    .execute(conn)?;
+    Ok(())
+}
+
+fn mark_session_memory_agent_ended(
+    conn: &mut SqliteConnection,
+    record_id: &str,
+    started_at: i64,
+    completed_at: i64,
+) -> Result<()> {
+    diesel::update(
+        schema::session_memory_records::dsl::session_memory_records
+            .filter(schema::session_memory_records::dsl::id.eq(record_id))
+            .filter(schema::session_memory_records::dsl::started_at.eq(started_at))
+            .filter(schema::session_memory_records::dsl::completed_at.is_null())
+            .filter(
+                schema::session_memory_records::dsl::source
+                    .ne(session_memory_source_to_db(SessionMemorySource::WarpTerminal)),
+            ),
+    )
+    .set((
+        schema::session_memory_records::dsl::completed_at.eq(completed_at),
+        schema::session_memory_records::dsl::status
+            .eq(session_memory_status_to_db(SessionMemoryStatus::Success)),
     ))
     .execute(conn)?;
     Ok(())

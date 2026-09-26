@@ -10,3 +10,5 @@ pub mod restore;
 #[cfg(test)]
 mod restore_tests;
 pub mod types;
+#[cfg(test)]
+mod types_tests;

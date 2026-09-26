@@ -516,6 +516,11 @@ pub enum ModelEvent {
         id: String,
         closed_intentionally_at: i64,
     },
+    MarkSessionMemoryAgentEnded {
+        id: String,
+        started_at: i64,
+        completed_at: i64,
+    },
     DeleteSessionMemoryRecord {
         id: String,
     },
