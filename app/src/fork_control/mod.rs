@@ -4,8 +4,10 @@ mod fork_settings;
 mod handlers;
 mod procinfo;
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -39,8 +41,26 @@ impl ForkControlHost {
         let (job_tx, job_rx) = async_channel::unbounded::<Job>();
         let drain = ctx.spawn_stream_local(
             job_rx,
-            |_, job, ctx| {
-                let result = handlers::handle(job.request, job.procs, ctx);
+            |host, job, ctx| {
+                let result = if host.server.is_none() {
+                    Err(ErrorBody::new(
+                        ErrorCode::Unavailable,
+                        "fork control API is disabled",
+                    ))
+                } else {
+                    match std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        handlers::handle(job.request, job.procs, ctx)
+                    })) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            log::error!("fork_control: request handler panicked");
+                            Err(ErrorBody::new(
+                                ErrorCode::Internal,
+                                "request handler panicked",
+                            ))
+                        }
+                    }
+                };
                 let _ = job.reply.send(result);
             },
             |_, _| {},
@@ -108,9 +128,14 @@ fn dispatch(job_tx: &async_channel::Sender<Job>, request: Request) -> Result<Val
     job_tx
         .try_send(Job { request, procs, reply })
         .map_err(|_| ErrorBody::new(ErrorCode::Unavailable, "Warp is shutting down"))?;
-    reply_rx
-        .recv_timeout(UI_TIMEOUT)
-        .map_err(|_| ErrorBody::new(ErrorCode::Timeout, "Warp did not answer in time"))?
+    reply_rx.recv_timeout(UI_TIMEOUT).map_err(|error| match error {
+        RecvTimeoutError::Timeout => {
+            ErrorBody::new(ErrorCode::Timeout, "Warp did not answer in time")
+        }
+        RecvTimeoutError::Disconnected => {
+            ErrorBody::new(ErrorCode::Internal, "Warp dropped the request")
+        }
+    })?
 }
 
 #[cfg(test)]
