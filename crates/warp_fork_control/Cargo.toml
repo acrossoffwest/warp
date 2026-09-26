@@ -10,7 +10,7 @@ path = "src/bin/warp_fork_ctl.rs"
 
 [dependencies]
 anyhow.workspace = true
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "env"] }
 dirs.workspace = true
 libc.workspace = true
 log.workspace = true
