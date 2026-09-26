@@ -212,9 +212,7 @@ pub fn session_file_mtime_floor<'a>(
         .map(|earliest| earliest - SESSION_FILE_START_TOLERANCE_SECONDS)
 }
 
-/// Fills missing native session ids of `candidates` from agent session files and
-/// returns the folders where an id-less resume (`--continue` / `--last`) would
-/// open an unclaimed conversation from the previous run.
+/// Returns the folders where an id-less continue would open an unclaimed previous-run session.
 pub fn resolve_missing_session_ids(
     candidates: &mut [SessionMemoryRecord],
     ended: &[SessionMemoryRecord],
