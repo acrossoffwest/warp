@@ -1,8 +1,8 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 use warp_core::channel::ChannelState;
 use warp_fork_control::pids::find_pane_for_pid;
 use warp_fork_control::protocol::{
-    API_VERSION, ErrorBody, ErrorCode, ListResult, PaneInfo, PingResult, Request,
+    API_VERSION, ErrorBody, ErrorCode, ListResult, PaneInfo, PingResult, Request, SetTitleParams,
 };
 use warpui::{AppContext, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
@@ -138,6 +138,73 @@ fn find_by_pid(pid: u32, procs: &ProcessTable, ctx: &AppContext) -> Result<PaneI
     Ok(pane_info(&panes[index], procs, ctx))
 }
 
+fn focus(pane_id: u64, ctx: &mut ModelContext<ForkControlHost>) -> Result<(), ErrorBody> {
+    let location = find_pane(pane_id, ctx)?;
+    location.workspace.update(ctx, |workspace, ctx| {
+        workspace.activate_tab(location.tab_index, ctx)
+    });
+    location.pane_group.update(ctx, |group, ctx| {
+        group.focus_pane_by_id(location.pane_id, ctx)
+    });
+    ctx.windows().show_window_and_focus_app(location.window_id);
+    Ok(())
+}
+
+fn find_tab(
+    tab_id: u64,
+    ctx: &AppContext,
+) -> Result<(ViewHandle<Workspace>, usize, ViewHandle<PaneGroup>), ErrorBody> {
+    sorted_workspaces(ctx)
+        .into_iter()
+        .find_map(|(_, workspace)| {
+            let found = workspace
+                .as_ref(ctx)
+                .tab_views()
+                .enumerate()
+                .find(|(_, group)| entity_number(group.id()) == tab_id)
+                .map(|(index, group)| (index, group.clone()));
+            found.map(|(index, group)| (workspace.clone(), index, group))
+        })
+        .ok_or_else(|| not_found(format!("no tab with tab_id {tab_id}")))
+}
+
+fn set_title(
+    params: SetTitleParams,
+    ctx: &mut ModelContext<ForkControlHost>,
+) -> Result<(), ErrorBody> {
+    let (workspace, tab_index, pane_group) = match (params.tab_id, params.pane_id) {
+        (Some(tab_id), _) => find_tab(tab_id, ctx)?,
+        (None, Some(pane_id)) => {
+            let location = find_pane(pane_id, ctx)?;
+            (location.workspace, location.tab_index, location.pane_group)
+        }
+        (None, None) => {
+            return Err(ErrorBody::new(
+                ErrorCode::BadRequest,
+                "tab_id or pane_id is required",
+            ));
+        }
+    };
+    let title = params
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    pane_group.update(ctx, |group, ctx| match title {
+        Some(title) => group.set_title(title, ctx),
+        None => group.clear_title(ctx),
+    });
+    // PaneGroup::set_title refocuses its own focused pane; hand focus back to the active tab.
+    workspace.update(ctx, |workspace, ctx| {
+        let active = workspace.active_tab_index();
+        if active != tab_index {
+            workspace.activate_tab(active, ctx);
+        }
+        ctx.notify();
+    });
+    Ok(())
+}
+
 pub(super) fn handle(
     request: Request,
     procs: Option<ProcessTable>,
@@ -153,6 +220,8 @@ pub(super) fn handle(
             let procs = procs.unwrap_or_else(ProcessTable::snapshot);
             find_by_pid(params.pid, &procs, ctx).and_then(to_value)
         }
+        Request::Focus(params) => focus(params.pane_id, ctx).map(|()| json!({})),
+        Request::SetTitle(params) => set_title(params, ctx).map(|()| json!({})),
         _ => Err(ErrorBody::new(ErrorCode::Internal, "not implemented yet")),
     }
 }
