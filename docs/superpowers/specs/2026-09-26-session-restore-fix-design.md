@@ -66,13 +66,29 @@ session even if `claude` is in its history.
 5. Candidates without a restored pane: if Warp's layout restore (`restore_session`) is off, open
    them as new tabs in the first window; if it is on, the pane was intentionally gone — skip.
 6. Resume command: `claude --resume <id>` / `codex resume <id>` with the preserved permission
-   flag; without id `claude --continue` / `codex resume --last`. Run in the record's cwd (the
-   restored pane already starts there; new tabs get `initial_directory`).
+   flag. Without id, `claude --continue` / `codex resume --last` only for the newest id-less
+   record of that agent and canonical folder, and only if the folder's newest session file from
+   the previous run is not claimed by another record; otherwise a fresh `claude` / `codex` with
+   the preserved permission flag. Run in the record's cwd (the restored pane already starts
+   there; new tabs get `initial_directory`).
+   Missing ids are filled from session files before planning: a live record's window is its
+   start to the current run's start, an ended record's window ends at its `completed_at`.
+   Ended records of the previous run compete for files too; tighter windows claim first. The
+   lookup reads only session starts: files not modified since the earliest start are skipped,
+   Claude files are read up to the first user message, Codex uses its threads table.
 7. Each candidate is used at most once; after the pass the previous run's candidates are marked
    offered so a second window or a later event cannot re-run them.
 8. Setting off → insert the command into the pane input without executing.
 9. Removed: the 30-minute "recent agent" rule, per-window restore, the 48-hour cwd enrichment and
    the dedupe that deletes records sharing a guessed id.
+
+### Known limits
+
+- A restore that was offered but never consumed is not offered again: quitting within ~1–2 s of
+  launch (before the resume command ran), auto-restore off with the inserted command never run,
+  or a missing folder. The candidates are marked offered as soon as the startup pass runs.
+- `claude update|mcp|setup-token|doctor|config|install|migrate-installer` and
+  `codex login|logout|mcp|completion|apply` are not recorded as agent sessions.
 
 ### Plain terminals
 
