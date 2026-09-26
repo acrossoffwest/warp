@@ -7,6 +7,7 @@ pub struct AgentSessionEntry {
     pub session_id: String,
     pub title: String,
     pub updated_at: i64,
+    pub created_at: i64,
     pub cwd: Option<PathBuf>,
     pub transcript_path: Option<PathBuf>,
     pub source: CLIAgent,
@@ -167,6 +168,7 @@ fn parse_claude_session(path: &Path, directory: &Path) -> Option<AgentSessionEnt
         session_id,
         title,
         updated_at,
+        created_at: updated_at,
         cwd: Some(directory.to_path_buf()),
         transcript_path: Some(path.to_path_buf()),
         source: CLIAgent::Claude,
@@ -301,6 +303,8 @@ struct CodexThread {
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
     first_user_message: Option<String>,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
+    created_at: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
     updated_at: i64,
 }
 
@@ -323,7 +327,7 @@ fn read_codex_sessions_all(directory: &Path) -> Vec<AgentSessionEntry> {
     let sessions_root = codex_sessions_root();
 
     let Ok(rows) = diesel::sql_query(
-        "SELECT id, first_user_message, updated_at FROM threads WHERE cwd = ? ORDER BY updated_at DESC",
+        "SELECT id, first_user_message, created_at, updated_at FROM threads WHERE cwd = ? ORDER BY updated_at DESC",
     )
     .bind::<diesel::sql_types::Text, _>(&cwd)
     .load::<CodexThread>(&mut conn) else {
@@ -344,6 +348,7 @@ fn read_codex_sessions_all(directory: &Path) -> Vec<AgentSessionEntry> {
                 session_id: row.id,
                 title,
                 updated_at: row.updated_at,
+                created_at: row.created_at,
                 cwd: Some(directory.to_path_buf()),
                 transcript_path,
                 source: CLIAgent::Codex,
