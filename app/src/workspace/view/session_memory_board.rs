@@ -14,10 +14,10 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 
 use crate::appearance::Appearance;
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::{view, BackingView, PaneConfiguration, PaneEvent};
+use crate::pane_group::pane::{BackingView, PaneConfiguration, PaneEvent, view};
 pub use crate::session_memory::types::{
-    command_preview, AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord,
-    SessionMemorySource, SessionMemoryStatus,
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    SessionMemoryStatus, command_preview,
 };
 use crate::ui_components::blended_colors;
 

@@ -38,6 +38,7 @@ pub use sqlite::database_file_path_for_scope;
 pub use sqlite::establish_ro_connection;
 use uuid::Uuid;
 use warp_core::command::ExitCode;
+use warp_errors::report_error;
 use warp_graphql::scalars::time::ServerTimestamp;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, SingletonEntity};
@@ -55,7 +56,6 @@ use crate::cloud_object::{
 };
 use crate::drive::folders::CloudFolder;
 use crate::notebooks::CloudNotebook;
-use crate::report_error;
 use crate::server::experiments::ServerExperiment;
 use crate::server::ids::SyncId;
 use crate::suggestions::ignored_suggestions_model::SuggestionType;
@@ -108,9 +108,9 @@ pub enum PersistedDataScope {
     /// The GUI app: everything, including window/tab/block session
     /// restoration and command history.
     Full,
-    /// The `warp-tui` front-end: cloud objects and agent/conversation state,
-    /// but no GUI session restoration, command history, user profiles, or
-    /// pending object actions.
+    /// The `warp-tui` front-end: command history, cloud objects, user profiles,
+    /// and agent/conversation state, but no GUI session restoration or pending
+    /// object actions.
     TuiFrontend,
     /// The remote server daemon: only codebase index metadata.
     CodebaseIndicesOnly,
@@ -122,9 +122,21 @@ impl PersistedDataScope {
         matches!(self, PersistedDataScope::Full)
     }
 
-    /// Command history, user profiles, and pending object actions, which
-    /// only the GUI consumes.
-    fn gui_history(self) -> bool {
+    /// Shell-command history consumed by both interactive front-ends.
+    fn command_history(self) -> bool {
+        matches!(
+            self,
+            PersistedDataScope::Full | PersistedDataScope::TuiFrontend
+        )
+    }
+
+    /// User profiles used to identify cloud-object creators in both interactive frontends.
+    fn user_profiles(self) -> bool {
+        self != PersistedDataScope::CodebaseIndicesOnly
+    }
+
+    /// Pending object actions, which only the GUI consumes.
+    fn gui_only_data(self) -> bool {
         matches!(self, PersistedDataScope::Full)
     }
 }

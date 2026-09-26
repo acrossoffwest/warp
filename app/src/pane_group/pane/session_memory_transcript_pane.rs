@@ -3,8 +3,8 @@ use warpui::{AppContext, ModelHandle, View, ViewContext, ViewHandle};
 use crate::{
     app_state::LeafContents,
     pane_group::pane::{
-        view::PaneView, BackingView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId,
-        ShareableLink, ShareableLinkError,
+        BackingView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+        ShareableLinkError, view::PaneView,
     },
     workspace::view::session_memory_transcript::{
         SessionMemoryTranscriptEvent, SessionMemoryTranscriptPaneInput, SessionMemoryTranscriptView,

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::types::{
-    user_command, AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource, user_command,
 };
 use crate::terminal::CLIAgent;
 

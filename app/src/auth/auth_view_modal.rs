@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use url::Url;
-use warp_core::errors::ErrorExt;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_anyhow, safe_error};
+use warp_errors::{ErrorExt, report_error};
 use warpui::actions::StandardAction;
 use warpui::elements::{
     ChildAnchor, ChildView, Container, Fill, HighlightedHyperlink, MouseStateHandle,
@@ -19,15 +19,14 @@ use warpui::{
     ViewHandle,
 };
 
+use super::UserUid;
 use super::auth_manager::{AuthManager, AuthManagerEvent};
-use super::auth_view_body::{AuthStep, AuthViewBodyEvent};
+use super::auth_view_body::{AuthStep, AuthViewBodyAction, AuthViewBodyEvent};
 use super::credentials::RefreshToken;
 use super::login_failure_notification::{self, LoginFailureReason};
-use super::UserUid;
 use crate::appearance::Appearance;
 use crate::auth::auth_view_body::AuthViewBody;
 use crate::modal::Modal;
-use crate::report_error;
 use crate::root_view::unthemed_window_border;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::util::bindings::CustomAction;
@@ -214,6 +213,12 @@ impl AuthView {
 
     pub fn skip_to_browser_open_step(&mut self, ctx: &mut ViewContext<Self>) {
         self.set_auth_step(ctx, AuthStep::BrowserOpen);
+    }
+
+    pub fn start_sign_in(&mut self, ctx: &mut ViewContext<Self>) {
+        self.update_auth_body(ctx, |body, ctx| {
+            body.handle_action(&AuthViewBodyAction::Login, ctx);
+        });
     }
 
     fn focus(&self, ctx: &mut ViewContext<Self>) {

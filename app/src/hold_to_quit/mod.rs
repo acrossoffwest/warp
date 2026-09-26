@@ -33,7 +33,7 @@ pub fn is_cmd_q_physically_held() -> bool {
     const KVK_ANSI_Q: u16 = 0x0C;
     const CMD_FLAG: u64 = 1 << 20;
     #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         fn CGEventSourceKeyState(state: u32, keycode: u16) -> bool;
         fn CGEventSourceFlagsState(state: u32) -> u64;
     }

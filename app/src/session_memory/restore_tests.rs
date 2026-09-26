@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use super::restore::{
-    agent_restore_plan, restore_plan_for_record, startup_restore_action_for_record,
-    terminal_restore_plan, RestoreError, RestoredTerminalPane, StartupRestoreAction,
+    RestoreError, RestoredTerminalPane, StartupRestoreAction, agent_restore_plan,
+    restore_plan_for_record, startup_restore_action_for_record, terminal_restore_plan,
 };
 use super::types::{
     AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,

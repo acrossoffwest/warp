@@ -4,12 +4,12 @@ use pathfinder_color::ColorU;
 use warpui::fonts::FamilyId;
 use warpui::ui_components::components::Coords;
 
-use crate::session_memory::types::{is_internal_warp_command, SessionMemoryRecord};
+use crate::session_memory::types::{SessionMemoryRecord, is_internal_warp_command};
 
 use super::{
-    command_preview, filter_rows, remove_row_by_id, row_actions, rows_from_records, short_row_id,
-    text_button_styles, AgentPermissionMode, RowActionKind, SessionMemoryBoardFilter,
-    SessionMemoryBoardRow, SessionMemoryKind, SessionMemorySource, SessionMemoryStatus,
+    AgentPermissionMode, RowActionKind, SessionMemoryBoardFilter, SessionMemoryBoardRow,
+    SessionMemoryKind, SessionMemorySource, SessionMemoryStatus, command_preview, filter_rows,
+    remove_row_by_id, row_actions, rows_from_records, short_row_id, text_button_styles,
 };
 
 fn terminal_row(id: &str, status: SessionMemoryStatus) -> SessionMemoryBoardRow {
@@ -161,9 +161,11 @@ fn interrupted_filter_only_shows_interrupted_rows() {
     let visible = filter_rows(&test_rows(), SessionMemoryBoardFilter::Interrupted, "");
 
     assert_eq!(visible.len(), 1);
-    assert!(visible
-        .iter()
-        .all(|row| row.status == SessionMemoryStatus::Interrupted));
+    assert!(
+        visible
+            .iter()
+            .all(|row| row.status == SessionMemoryStatus::Interrupted)
+    );
 }
 
 #[test]
@@ -184,9 +186,11 @@ fn live_filter_only_shows_live_rows() {
     let visible = filter_rows(&test_rows(), SessionMemoryBoardFilter::Live, "");
 
     assert_eq!(visible.len(), 1);
-    assert!(visible
-        .iter()
-        .all(|row| row.status == SessionMemoryStatus::Live));
+    assert!(
+        visible
+            .iter()
+            .all(|row| row.status == SessionMemoryStatus::Live)
+    );
 }
 
 #[test]

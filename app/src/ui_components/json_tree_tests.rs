@@ -5,8 +5,8 @@
 //! They do not exercise the element-construction layer (which requires a
 //! running UI framework).
 use crate::ui_components::json_tree::{
-    format_array_annotation, format_number, format_object_annotation, is_long_string,
-    JsonTreeState, PathSegment, LONG_STRING_THRESHOLD,
+    JsonTreeState, LONG_STRING_THRESHOLD, PathSegment, format_array_annotation, format_number,
+    format_object_annotation, is_long_string,
 };
 
 // -----------------------------------------------------------------------
@@ -308,7 +308,7 @@ fn multi_key_object_all_entries_preserved() {
 fn mcp_result_success_with_structured_content_returns_tree() {
     use crate::ai::agent::CallMCPToolResult;
     use crate::ai::blocklist::inline_action::requested_command::{
-        mcp_result_to_renderable, McpRenderable,
+        McpRenderable, mcp_result_to_renderable,
     };
 
     let value = serde_json::json!({"count": 42, "files": ["a.rs", "b.rs"]});
@@ -325,11 +325,11 @@ fn mcp_result_success_with_structured_content_returns_tree() {
 fn mcp_result_success_with_json_text_content_returns_parsed_tree() {
     use crate::ai::agent::CallMCPToolResult;
     use crate::ai::blocklist::inline_action::requested_command::{
-        mcp_result_to_renderable, McpRenderable,
+        McpRenderable, mcp_result_to_renderable,
     };
 
     let json_str = r#"{"status": "ok", "value": 7}"#;
-    let content = vec![rmcp::model::Content::text(json_str)];
+    let content = vec![rmcp::model::ContentBlock::text(json_str)];
     let result = rmcp::model::CallToolResult::success(content);
     let renderable = mcp_result_to_renderable(&CallMCPToolResult::Success { result });
 
@@ -344,11 +344,11 @@ fn mcp_result_success_with_json_text_content_returns_parsed_tree() {
 fn mcp_result_success_with_non_json_text_returns_string_tree() {
     use crate::ai::agent::CallMCPToolResult;
     use crate::ai::blocklist::inline_action::requested_command::{
-        mcp_result_to_renderable, McpRenderable,
+        McpRenderable, mcp_result_to_renderable,
     };
 
     let plain_text = "just some plain text output";
-    let content = vec![rmcp::model::Content::text(plain_text)];
+    let content = vec![rmcp::model::ContentBlock::text(plain_text)];
     let result = rmcp::model::CallToolResult::success(content);
     let renderable = mcp_result_to_renderable(&CallMCPToolResult::Success { result });
 
@@ -364,7 +364,7 @@ fn mcp_result_success_with_non_json_text_returns_string_tree() {
 fn mcp_result_error_returns_error_variant() {
     use crate::ai::agent::CallMCPToolResult;
     use crate::ai::blocklist::inline_action::requested_command::{
-        mcp_result_to_renderable, McpRenderable,
+        McpRenderable, mcp_result_to_renderable,
     };
 
     let msg = "tool not found".to_string();
@@ -380,7 +380,7 @@ fn mcp_result_error_returns_error_variant() {
 fn mcp_result_cancelled_returns_cancelled_variant() {
     use crate::ai::agent::CallMCPToolResult;
     use crate::ai::blocklist::inline_action::requested_command::{
-        mcp_result_to_renderable, McpRenderable,
+        McpRenderable, mcp_result_to_renderable,
     };
 
     let renderable = mcp_result_to_renderable(&CallMCPToolResult::Cancelled);

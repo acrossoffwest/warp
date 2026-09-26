@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use ipc::ConnectionAddress;
 use warp::integration_testing::{
-    pane_group::assert_num_panes_in_tab,
-    step::new_step_with_default_assertions,
+    pane_group::assert_num_panes_in_tab, step::new_step_with_default_assertions,
     terminal::wait_until_bootstrapped_single_pane_for_tab,
 };
-use warpui::integration::TestStep;
+use warpui_core::integration::TestStep;
 
 use super::new_builder;
 use crate::Builder;
@@ -22,11 +21,11 @@ pub fn test_remote_control_split_and_run() -> Builder {
         // Step 2: connect an IPC client, send Ping → assert Pong, then send
         //         SplitActivePaneAndRun → assert Ok.
         .with_step(
-            TestStep::new("remote_control: ping and split via IPC")
-                .with_action(|app, _window_id, _step_data| {
+            TestStep::new("remote_control: ping and split via IPC").with_action(
+                |app, _window_id, _step_data| {
                     let background_executor = app.background_executor();
 
-                    warpui::r#async::block_on(async move {
+                    warpui_core::r#async::block_on(async move {
                         // Read the socket address published by the server.
                         let addr_path = warp::remote_control::socket_address_path()
                             .expect("remote_control addr path should be available");
@@ -58,10 +57,7 @@ pub fn test_remote_control_split_and_run() -> Builder {
                             .await
                             .expect("Ping call should succeed");
                         assert!(
-                            matches!(
-                                ping_resp,
-                                warp::remote_control::RemoteControlResponse::Pong
-                            ),
+                            matches!(ping_resp, warp::remote_control::RemoteControlResponse::Pong),
                             "Expected Pong, got {ping_resp:?}",
                         );
 
@@ -76,14 +72,12 @@ pub fn test_remote_control_split_and_run() -> Builder {
                             .await
                             .expect("SplitActivePaneAndRun call should succeed");
                         assert!(
-                            matches!(
-                                split_resp,
-                                warp::remote_control::RemoteControlResponse::Ok
-                            ),
+                            matches!(split_resp, warp::remote_control::RemoteControlResponse::Ok),
                             "Expected Ok, got {split_resp:?}",
                         );
                     });
-                }),
+                },
+            ),
         )
         // Step 3: wait for the split to materialise — pane count in tab 0 should be 2.
         .with_step(

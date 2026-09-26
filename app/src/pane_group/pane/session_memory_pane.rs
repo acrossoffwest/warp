@@ -3,12 +3,12 @@ use warpui::{AppContext, ModelHandle, SingletonEntity, View, ViewContext, ViewHa
 use crate::{
     app_state::LeafContents,
     pane_group::pane::{
-        view::PaneView, BackingView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId,
-        ShareableLink, ShareableLinkError,
+        BackingView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+        ShareableLinkError, view::PaneView,
     },
     session_memory::model::SessionMemoryModel,
     workspace::view::session_memory_board::{
-        rows_from_records, SessionMemoryBoard, SessionMemoryBoardEvent,
+        SessionMemoryBoard, SessionMemoryBoardEvent, rows_from_records,
     },
 };
 

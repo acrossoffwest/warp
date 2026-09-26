@@ -15,7 +15,7 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 
 use crate::appearance::Appearance;
 use crate::pane_group::focus_state::PaneFocusHandle;
-use crate::pane_group::pane::{view, BackingView, PaneConfiguration, PaneEvent};
+use crate::pane_group::pane::{BackingView, PaneConfiguration, PaneEvent, view};
 use crate::session_memory::types::SessionMemorySource;
 use crate::ui_components::blended_colors;
 use crate::workspace::view::session_memory_board::SessionMemoryBoardAction;

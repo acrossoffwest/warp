@@ -1,5 +1,5 @@
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use warpui::{Entity, ModelContext, SingletonEntity};
