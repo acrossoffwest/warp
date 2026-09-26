@@ -66,10 +66,11 @@ targeting a release build.
   macOS/BSD, `SO_PEERCRED` on Linux); a connection from a different UID is
   logged and dropped without any response. On platforms where the peer UID
   cannot be determined, the connection is rejected the same way.
-- macOS's `sun_path` limit is 104 bytes (103 usable here); a socket path
-  longer than that (e.g. a long home directory plus a long profile name)
-  makes startup fail with a clear log line — the server is simply not
-  started, `ping` will fail to connect.
+- Socket paths are limited to 103 bytes on both macOS and Linux (macOS's
+  `sun_path` is 104 bytes including the NUL; Linux's is 108, but the same
+  103-byte cap is enforced there too). A longer path (e.g. a long home
+  directory plus a long profile name) makes startup fail with a clear log
+  line — the server is simply not started, `ping` will fail to connect.
 
 **Stale sockets and instance conflicts:**
 - If a file already exists at the socket path and connecting to it succeeds,
@@ -314,8 +315,11 @@ for that; see Guarantees.
   creation can itself fail; that surfaces as `internal` ("new window has
   no workspace").
 - With `window: "current"` and `focus: false`, the tab is created but the
-  previously active tab is re-activated afterward — the new tab exists but
-  isn't the one shown.
+  previously active tab (identified by its tab, not its position) is
+  re-activated afterward — the new tab exists but isn't the one shown.
+  Adding and re-activating a tab goes through Warp's normal tab switching,
+  which closes an open command palette in that window and focuses the
+  active tab's pane.
 
 **Errors:**
 - `bad_request` — `cwd` isn't an absolute, existing directory.
@@ -351,10 +355,13 @@ title clears the custom title the same as `null` does.
 **Errors:** `bad_request` (neither or both of `tab_id`/`pane_id` given),
 `not_found` (no tab/pane with that id).
 
-Renaming a tab that isn't the active one internally refocuses that tab's own
-pane for a moment (an upstream side effect of the title-setting call) —
-Warp restores focus to whichever tab was actually active immediately
-afterward, so from the caller's perspective the active tab does not change.
+Renaming never changes the active tab. The upstream title setter focuses
+the renamed tab's pane as a side effect; Warp then hands focus back to the
+active tab's focused pane (without switching tabs or closing anything).
+Residual effect: if keyboard focus was somewhere other than the active
+tab's focused pane — an open command palette, a search bar, a dialog in
+that window — that element stays open but loses keyboard focus to the
+active tab's pane, so the user has to click back into it.
 
 **Example — built from the types** (no live sample exists for this method;
 values are placeholders):
@@ -381,10 +388,10 @@ pass `--clear` to reset).
 **Result:** `{"delivered_to": "pty" | "input_editor"}`.
 
 **Errors:** `not_in_tui` (pane is at a shell prompt and `allow_shell` is
-`false`), `pane_busy` (the pane is running a Warp-agent block, or an agent
-takes control of it between the routing decision and the PTY write —
-either way, no text reaches the pane), `not_found` (`pane_id` doesn't
-exist). Full routing/encoding rules are in section 8.
+`false`), `pane_busy` (the pane is running a Warp-agent block, or a Warp
+agent controls the running command's input — no text reaches the pane),
+`not_found` (`pane_id` doesn't exist). Full routing/encoding rules are in
+section 8.
 
 **Example — live error, from the Task 11 integration test** (a fresh pane at
 a shell prompt, `allow_shell` omitted/`false`):
@@ -446,8 +453,8 @@ CLI: `warp-fork-ctl find-pid <PID>`.
 | `unknown_method` | `method` isn't one of the seven names above |
 | `not_found` | `focus`/`set_title`/`send_input` given a `pane_id`/`tab_id` that doesn't exist; `find_by_pid` found no owning pane |
 | `not_in_tui` | `send_input` on a pane at a shell prompt without `allow_shell: true` |
-| `pane_busy` | `send_input` on a pane where a Warp agent block is running, or where an agent takes control between the routing decision and the PTY write — in both cases no text is delivered |
-| `timeout` | The UI thread did not answer within 5 seconds (see Guarantees — the request may still complete after this) |
+| `pane_busy` | `send_input` on a pane where a Warp agent block is running, or where a Warp agent controls the running command's input — in both cases no text is delivered |
+| `timeout` | The UI thread did not answer within 5 seconds (see Guarantees for exactly when the request can still take effect) |
 | `unavailable` | The API is disabled (including a race where it was disabled after the request was accepted); the job queue is closed (Warp shutting down); `open_tab` with `window: "current"` and no Warp window open |
 | `internal` | A request handler panicked; a result failed to serialize; `open_tab` with `window: "new"` could not create a workspace; the reply channel was dropped before answering |
 
@@ -466,12 +473,26 @@ CLI: `warp-fork-ctl find-pid <PID>`.
   on the connection thread beforehand (not the UI thread), so they can be
   slightly stale relative to the exact moment the UI thread processes the
   request.
-- **5-second UI timeout:** if the UI thread doesn't answer within 5 seconds,
-  the caller gets `timeout`. This is a client-visible timeout only — the
-  job may already be queued or even executing on the UI thread and can
-  still complete (or fail) after the response is sent. A `timeout` on
-  `open_tab` is therefore not safe to blindly retry: retrying can produce a
-  second tab if the first `open_tab` eventually succeeds anyway.
+- **5-second UI timeout:** every request gets a deadline 5 seconds after it
+  is queued; the connection waits exactly until that deadline. When the
+  UI thread picks up a job whose deadline has passed, it drops it without
+  running it. A `timeout` response therefore means one of two things:
+  (a) the job had not started by the deadline and will never run, or
+  (b) its handler had already started before the deadline and was still
+  executing when the connection stopped waiting — it then completes
+  normally, but its answer is discarded. Case (b) needs the UI thread to be
+  stuck inside that very handler, which is rare; case (a) is what a busy or
+  blocked UI thread produces. Retrying after `timeout` is safe except in
+  case (b), which the caller cannot distinguish from (a); for `open_tab`,
+  check `list` for a matching pane before retrying so case (b) cannot
+  produce a second tab. Timers a handler started (the delayed Enter of
+  `send_input`, an `open_tab` command waiting for the shell) are not
+  affected by the deadline.
+- **Handler panics:** a request handler that panics is caught and answered
+  with `internal`; the API and the app keep running. Handlers are written
+  not to panic, but a panic that happens inside a nested update of a view
+  (a pane, a tab, the workspace) can leave that particular view in an
+  inconsistent state until it is closed.
 - **`open_tab` returns before the shell starts:** `shell_pid` in the result
   can be `null`; the requested `command` still runs, once the new pane's
   shell finishes its login bootstrap. A caller that needs the shell PID (or
@@ -486,52 +507,62 @@ Routing, in order:
 1. If the pane's terminal is on the **alternate screen** (full-screen TUI
    apps such as `vim` or `less` use this), input always goes to the **PTY**,
    regardless of `allow_shell`.
-2. Else, if Warp considers a command **running** in the pane (a running
+2. Else, if a **Warp agent** block is the pane's active block, the request
+   fails with `pane_busy` — this holds even if `allow_shell` is set. This
+   is checked before rule 3, so a Warp agent block wins over a running
+   command.
+3. Else, if Warp considers a command **running** in the pane (a running
    block that hasn't completed yet — this is the path Claude Code and other
    agents rendering in the main screen normally take, since they don't use
    the alt screen), input goes to the **PTY**.
-3. Else, if a **Warp agent** block is running in the pane, the request fails
-   with `pane_busy` — this holds even if `allow_shell` is set.
 4. Else the pane is **at a shell prompt**: without `allow_shell` this fails
    with `not_in_tui`; with `allow_shell: true` it is delivered to Warp's own
    **input editor** instead of the PTY.
 
-Rule 2's "running" classification and the actual PTY write happen in two
-separate steps (the request is classified, then a moment later the pane
-is updated to perform the write). If a Warp agent takes control of the pane
-in between, the write itself is refused and the whole call fails with
-`pane_busy` even though rule 2 initially routed it to the PTY — the same
-code path a plain agent-block pane hits under rule 3. Either way, this
-happens on the very first byte written, so no partial text is ever
-delivered when this fires.
+On the PTY route, if a Warp agent controls the running command's input
+(Warp's "agent in control" state for a long-running command), the call
+fails with `pane_busy` and nothing is written. This is checked right
+before the first write; no partial text is ever delivered.
 
-**PTY delivery (`delivered_to: "pty"`), `mode: "paste"` (default):**
-- `\r\n` and `\n` in `text` are normalized to `\r`.
-- If the target program has itself enabled **bracketed paste**, the text is
-  wrapped in `ESC[200~ … ESC[201~` before being written; if the program
-  has not enabled it, the text is written as plain normalized bytes (no
-  wrapping — a multi-line paste to a program that never asked for
-  bracketed paste therefore submits/executes line by line as the terminal
-  sees each `\r`, since there's no bracket marker telling it "this is one
-  paste").
-- If `submit: true` **and** the text was wrapped for bracketed paste, the
-  terminating `\r` is sent **300 ms later** on a separate timer — the same
-  delay upstream Warp uses before submitting a paste to a CLI agent. This
-  is fire-and-forget: the write already returned success to the caller
-  before the timer fires. If a Warp agent takes control of the pane during
-  that 300 ms window, the delayed `\r` is silently dropped — the caller
-  already got an `ok: true` response and has no way to observe the drop.
-- If `submit: true` and the text was **not** wrapped (no bracketed paste,
-  or empty text), `\r` is sent immediately, as a second write right after
-  the text (still one round trip, no 300 ms gap — both writes happen
-  synchronously, so nothing can interrupt between them).
+**PTY delivery (`delivered_to: "pty"`), `submit: true` to a recognized CLI
+agent:** when `submit` is `true`, `text` is non-empty and Warp has
+recognized a CLI agent session in the pane (Claude Code, Codex, Gemini,
+Copilot, OpenCode, … — the same detection that drives Warp's agent
+footer/rich input), the text is handed to Warp's own per-agent submit
+pipeline, the one its rich-input composer uses. `mode` and newline
+normalization do not apply on this path; the agent's strategy decides:
+- Claude Code, Gemini, OpenCode, Auggie, Grok, Cursor CLI: unwrapped text,
+  then `\r` about 50 ms later (they ignore a `\r` that arrives together
+  with the text).
+- Codex, Hermes, OhMyPi: bracketed paste, then `\r` immediately.
+- Copilot: bracketed paste, then `\r` about 300 ms later.
+- Other recognized agents: text and `\r` in one write.
 
-**PTY delivery, `mode: "keys"`:** never wrapped in bracketed-paste markers,
-regardless of what the program enabled. `\r\n`/`\n` are still normalized to
-`\r`. `submit: true` sends `\r` immediately (no 300 ms delay — the delay only
-applies to the bracketed-paste case above). Multi-line `keys` text is
-therefore always delivered/submitted line by line from the target
-program's point of view.
+Delivering through that pipeline may also close the pane's CLI-agent rich
+input composer if the user has it open (Warp's own "dismiss after submit"
+setting decides, as for a normal submit).
+
+**PTY delivery, everything else** (no recognized CLI agent, `submit:
+false`, or empty `text`):
+- `mode: "paste"` (default): `\r\n` and `\n` in `text` are normalized to
+  `\r`. If the target program has itself enabled **bracketed paste**, the
+  text is wrapped in `ESC[200~ … ESC[201~`; otherwise it is written as
+  plain normalized bytes (a multi-line paste to a program that never asked
+  for bracketed paste therefore submits/executes line by line as the
+  terminal sees each `\r`).
+- `mode: "keys"`: never wrapped in bracketed-paste markers, regardless of
+  what the program enabled; `\r\n`/`\n` are still normalized to `\r`.
+- `submit: true` with non-empty text: the terminating `\r` is **always** a
+  separate write, sent **300 ms** after the text if the text was wrapped in
+  bracketed paste, otherwise **50 ms** after it. Many TUIs ignore an Enter
+  that arrives in the same read as the text, or right after a paste end
+  marker.
+- `submit: true` with empty `text`: just `\r`, written immediately.
+
+The delayed Enter (either path) is fire-and-forget: the call has already
+returned `ok: true` when it fires. If the pane is closed or a Warp agent
+takes control of it in that window, the Enter is silently dropped and the
+caller cannot observe it.
 
 **Input-editor delivery (`delivered_to: "input_editor"`, i.e. `allow_shell`
 routed a shell-prompt pane):** `mode` is ignored — there is no PTY wrapping
@@ -578,9 +609,11 @@ process has actually started — see the `open_tab` note in Guarantees.
 ```
 No `allow_shell` is needed here — the target pane is expected to already be
 running the agent (alt screen or a running block), so this routes to the
-PTY. Space consecutive `send_input` calls to the same pane apart by more
-than 300 ms when using `submit: true` in `paste` mode with bracketed paste,
-or two pending Enters can interleave with the next call's paste markers.
+PTY; for a pane where Warp recognizes Claude Code, Codex etc. it goes
+through that agent's own submit strategy (section 8). Every `submit: true`
+sends its Enter up to 300 ms after the call returns, so space consecutive
+`send_input` calls to the same pane apart by more than 300 ms, or a pending
+Enter can interleave with the next call's text.
 
 **(d) Restore pinned sessions after a reboot.** `ping` first — the API can't
 launch Warp itself, so wait for it to be up. Then `list` and match already-
@@ -595,7 +628,9 @@ for sessions with no matching pane, one `open_tab` call each:
 (`window: "new"` for the first one to get a window at all if none is open;
 `"current"` — the default — for subsequent tabs once a window exists.) Do
 not retry an individual `open_tab` call on `timeout` without first checking
-`list` for a pane that already matches it — see Guarantees.
+`list` for a pane that already matches it — a timed-out request can still
+have run if its handler was already executing at the deadline (see
+Guarantees).
 
 ## 10. Minimal Node client
 
@@ -667,7 +702,10 @@ for its own socket path other than by successfully connecting to it).
   program opts into, e.g. most readline/editline-based programs and TUIs);
   a program that never enabled it receives unwrapped, newline-normalized
   text, and a multi-line paste submits/executes line by line rather than
-  as one atomic paste.
+  as one atomic paste. (A `submit: true` to a recognized CLI agent follows
+  that agent's own strategy instead — section 8.)
 - `open_tab`'s `focus` flag has no effect when `window: "new"` — a new
   window is always brought to front.
-- No exactly-once delivery guarantee across a `timeout` — see Guarantees.
+- No exactly-once delivery guarantee across a `timeout`: an expired request
+  is dropped, but one whose handler was already running at the deadline
+  still completes — see Guarantees.
