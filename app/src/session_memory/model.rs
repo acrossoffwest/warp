@@ -1,23 +1,28 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::persistence::{self, ModelEvent};
 
-use super::restore::terminal_restore_plan;
-use super::types::{
-    SessionMemoryRecord, SessionMemoryRunState, SessionMemorySource, SessionMemoryStatus,
-};
+use super::types::{SessionMemoryRecord, SessionMemoryRunState, SessionMemoryStatus};
 
 pub type SessionMemoryEventSink = Arc<dyn Fn(SessionMemoryModelEvent) + Send + Sync + 'static>;
-const RECENT_AGENT_STARTUP_RESTORE_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionMemoryModelEvent {
-    UpsertRecord { record: SessionMemoryRecord },
-    DeleteRecord { id: String },
+    UpsertRecord {
+        record: SessionMemoryRecord,
+    },
+    DeleteRecord {
+        id: String,
+    },
+    MarkRecordsOffered {
+        ids: Vec<String>,
+        app_run_id: String,
+        offered_run_id: String,
+    },
 }
 
 pub struct SessionMemoryModel {
@@ -43,75 +48,13 @@ impl SessionMemoryModel {
             record.status = record
                 .status
                 .classify_startup(record.closed_intentionally_at);
-            record.normalize_terminal_agent_command();
         }
 
-        let mut model = Self {
+        Self {
             records,
             event_sink,
             run_state,
-        };
-        model.dedupe_native_session_duplicates();
-        model
-    }
-
-    /// An agent chat is identified by its native session id, not by the pane
-    /// that happened to host it. Panes change across restores, so without
-    /// dedupe every restore leaves a stale copy of the same chat behind.
-    /// Keeps the most recently seen record per native session id.
-    fn dedupe_native_session_duplicates(&mut self) {
-        let mut keep: std::collections::HashMap<String, (i64, String)> =
-            std::collections::HashMap::new();
-        for record in &self.records {
-            let Some(native_session_id) = &record.native_session_id else {
-                continue;
-            };
-            let candidate = (record.last_seen_at, record.id.clone());
-            match keep.get(native_session_id) {
-                Some(best) if *best >= candidate => {}
-                _ => {
-                    keep.insert(native_session_id.clone(), candidate);
-                }
-            }
         }
-
-        let removed = self
-            .records
-            .iter()
-            .filter(|record| {
-                record
-                    .native_session_id
-                    .as_ref()
-                    .and_then(|native_session_id| keep.get(native_session_id))
-                    .is_some_and(|(_, keep_id)| *keep_id != record.id)
-            })
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
-        for id in removed {
-            self.delete(&id);
-        }
-    }
-
-    /// Removes stale records describing the same native agent session as
-    /// `record` (which just got fresh data and wins regardless of timestamps).
-    /// Returns the removed record ids.
-    fn dedupe_native_session_duplicates_of(&mut self, record: &SessionMemoryRecord) -> Vec<String> {
-        let Some(native_session_id) = &record.native_session_id else {
-            return Vec::new();
-        };
-        let removed = self
-            .records
-            .iter()
-            .filter(|existing| {
-                existing.id != record.id
-                    && existing.native_session_id.as_deref() == Some(native_session_id.as_str())
-            })
-            .map(|existing| existing.id.clone())
-            .collect::<Vec<_>>();
-        for id in &removed {
-            self.delete(id);
-        }
-        removed
     }
 
     pub fn from_persisted_records(
@@ -151,6 +94,15 @@ impl SessionMemoryModel {
                     SessionMemoryModelEvent::DeleteRecord { id } => {
                         ModelEvent::DeleteSessionMemoryRecord { id }
                     }
+                    SessionMemoryModelEvent::MarkRecordsOffered {
+                        ids,
+                        app_run_id,
+                        offered_run_id,
+                    } => ModelEvent::MarkSessionMemoryRecordsOffered {
+                        ids,
+                        app_run_id,
+                        offered_run_id,
+                    },
                 };
 
                 if let Err(err) = sender.send(model_event) {
@@ -183,51 +135,45 @@ impl SessionMemoryModel {
             .collect()
     }
 
-    pub fn startup_auto_restore_records(&self) -> Vec<SessionMemoryRecord> {
-        let previous_run_id = self
-            .run_state
-            .previous_run_id
-            .as_deref()
-            .or(self.run_state.recoverable_run_id.as_deref());
-        let now = now_unix_seconds();
+    pub fn startup_restore_candidates(&self) -> Vec<SessionMemoryRecord> {
+        let Some(previous_run_id) = self.run_state.previous_run_id.as_deref() else {
+            return Vec::new();
+        };
 
+        let mut candidates: Vec<SessionMemoryRecord> = Vec::new();
+        for record in self.records.iter().filter(|record| {
+            record.is_agent()
+                && record.app_run_id.as_deref() == Some(previous_run_id)
+                && record.completed_at.is_none()
+                && record.closed_intentionally_at.is_none()
+                && record.recovery_offered_run_id.is_none()
+        }) {
+            let duplicate = record
+                .native_session_id
+                .as_ref()
+                .and_then(|native_session_id| {
+                    candidates.iter().position(|candidate| {
+                        candidate.native_session_id.as_ref() == Some(native_session_id)
+                    })
+                });
+            match duplicate {
+                Some(index) if candidates[index].last_seen_at >= record.last_seen_at => {}
+                Some(index) => candidates[index] = record.clone(),
+                None => candidates.push(record.clone()),
+            }
+        }
+        candidates
+    }
+
+    pub fn previous_run_native_session_ids(&self) -> HashSet<String> {
+        let Some(previous_run_id) = self.run_state.previous_run_id.as_deref() else {
+            return HashSet::new();
+        };
         self.records
             .iter()
-            .filter(|record| {
-                record.status == SessionMemoryStatus::Interrupted
-                    && record.app_run_id.as_deref() != Some(self.run_state.current_run_id.as_str())
-                    && record.recovery_offered_run_id.as_deref()
-                        != Some(self.run_state.current_run_id.as_str())
-                    && Self::should_auto_restore_on_startup(record)
-                    && (record.app_run_id.as_deref() == previous_run_id
-                        || Self::is_recent_agent_startup_restore_candidate(record, now))
-            })
-            .cloned()
+            .filter(|record| record.app_run_id.as_deref() == Some(previous_run_id))
+            .filter_map(|record| record.native_session_id.clone())
             .collect()
-    }
-
-    fn should_auto_restore_on_startup(record: &SessionMemoryRecord) -> bool {
-        match record.source {
-            SessionMemorySource::ClaudeCode | SessionMemorySource::Codex => {
-                // A set `completed_at` means the agent exited inside a live
-                // pane — the user ended the chat, so don't resurrect it.
-                record.native_session_id.is_some() && record.completed_at.is_none()
-            }
-            SessionMemorySource::WarpTerminal => {
-                terminal_restore_plan(record, false).auto_run() == Some(true)
-            }
-        }
-    }
-
-    fn is_recent_agent_startup_restore_candidate(record: &SessionMemoryRecord, now: i64) -> bool {
-        if !matches!(
-            record.source,
-            SessionMemorySource::ClaudeCode | SessionMemorySource::Codex
-        ) {
-            return false;
-        }
-
-        now.abs_diff(record.last_seen_at) <= RECENT_AGENT_STARTUP_RESTORE_SECONDS
     }
 
     pub fn filtered_records(&self, query: &str) -> Vec<SessionMemoryRecord> {
@@ -238,13 +184,11 @@ impl SessionMemoryModel {
             .collect()
     }
 
-    /// Returns the ids of stale duplicate records removed by the upsert.
-    pub fn upsert(&mut self, record: SessionMemoryRecord) -> Vec<String> {
+    pub fn upsert(&mut self, record: SessionMemoryRecord) {
         let mut record = record;
         if record.app_run_id.is_none() {
             record.app_run_id = Some(self.run_state.current_run_id.clone());
         }
-        record.normalize_terminal_agent_command();
 
         if let Some(existing) = self
             .records
@@ -256,19 +200,13 @@ impl SessionMemoryModel {
             self.records.push(record.clone());
         }
 
-        let removed = self.dedupe_native_session_duplicates_of(&record);
-
         if let Some(event_sink) = &self.event_sink {
             event_sink(SessionMemoryModelEvent::UpsertRecord { record });
         }
-        removed
     }
 
     pub fn upsert_and_notify(&mut self, record: SessionMemoryRecord, ctx: &mut ModelContext<Self>) {
-        let removed = self.upsert(record.clone());
-        for id in removed {
-            ctx.emit(SessionMemoryModelEvent::DeleteRecord { id });
-        }
+        self.upsert(record.clone());
         ctx.emit(SessionMemoryModelEvent::UpsertRecord { record });
     }
 
@@ -302,18 +240,24 @@ impl SessionMemoryModel {
     }
 
     pub fn mark_startup_recovery_offered(&mut self, ids: &[String]) {
-        let mut changed_records = Vec::new();
+        let Some(previous_run_id) = self.run_state.previous_run_id.clone() else {
+            return;
+        };
+        let offered_run_id = self.run_state.current_run_id.clone();
         for record in &mut self.records {
-            if ids.iter().any(|id| id == &record.id) {
-                record.recovery_offered_run_id = Some(self.run_state.current_run_id.clone());
-                changed_records.push(record.clone());
+            if ids.iter().any(|id| id == &record.id)
+                && record.app_run_id.as_deref() == Some(previous_run_id.as_str())
+            {
+                record.recovery_offered_run_id = Some(offered_run_id.clone());
             }
         }
 
         if let Some(event_sink) = &self.event_sink {
-            for record in changed_records {
-                event_sink(SessionMemoryModelEvent::UpsertRecord { record });
-            }
+            event_sink(SessionMemoryModelEvent::MarkRecordsOffered {
+                ids: ids.to_vec(),
+                app_run_id: previous_run_id,
+                offered_run_id,
+            });
         }
     }
 
@@ -339,10 +283,3 @@ impl Entity for SessionMemoryModel {
 }
 
 impl SingletonEntity for SessionMemoryModel {}
-
-fn now_unix_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or_default()
-}

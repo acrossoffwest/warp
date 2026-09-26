@@ -522,6 +522,11 @@ pub enum ModelEvent {
         started_at: i64,
         completed_at: i64,
     },
+    MarkSessionMemoryRecordsOffered {
+        ids: Vec<String>,
+        app_run_id: String,
+        offered_run_id: String,
+    },
     DeleteSessionMemoryRecord {
         id: String,
     },

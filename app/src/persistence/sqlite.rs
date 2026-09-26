@@ -886,6 +886,12 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             completed_at,
         } => mark_session_memory_agent_ended(connection, &id, started_at, completed_at)
             .context("error marking session memory agent ended"),
+        ModelEvent::MarkSessionMemoryRecordsOffered {
+            ids,
+            app_run_id,
+            offered_run_id,
+        } => mark_session_memory_records_offered(connection, &ids, &app_run_id, &offered_run_id)
+            .context("error marking session memory records offered"),
         ModelEvent::DeleteSessionMemoryRecord { id } => {
             delete_session_memory_record(connection, &id)
                 .context("error deleting session memory record")
@@ -1177,6 +1183,22 @@ fn mark_session_memory_agent_ended(
         schema::session_memory_records::dsl::status
             .eq(session_memory_status_to_db(SessionMemoryStatus::Success)),
     ))
+    .execute(conn)?;
+    Ok(())
+}
+
+fn mark_session_memory_records_offered(
+    conn: &mut SqliteConnection,
+    record_ids: &[String],
+    app_run_id: &str,
+    offered_run_id: &str,
+) -> Result<()> {
+    diesel::update(
+        schema::session_memory_records::dsl::session_memory_records
+            .filter(schema::session_memory_records::dsl::id.eq_any(record_ids))
+            .filter(schema::session_memory_records::dsl::app_run_id.eq(app_run_id)),
+    )
+    .set(schema::session_memory_records::dsl::recovery_offered_run_id.eq(offered_run_id))
     .execute(conn)?;
     Ok(())
 }

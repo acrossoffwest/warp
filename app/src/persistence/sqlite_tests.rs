@@ -1585,3 +1585,42 @@ fn session_memory_app_run_count(conn: &mut diesel::sqlite::SqliteConnection) -> 
         .get_result(conn)
         .expect("app runs should be counted")
 }
+
+#[test]
+fn mark_records_offered_skips_rows_rewritten_by_current_run() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
+    let mut previous = session_memory_agent_record(Some(100));
+    previous.id = "previous-pane".to_string();
+    previous.app_run_id = Some("previous-run".to_string());
+    let mut rewritten = session_memory_agent_record(Some(300));
+    rewritten.id = "rewritten-pane".to_string();
+    rewritten.app_run_id = Some("current-run".to_string());
+    upsert_session_memory(&mut conn, previous);
+    upsert_session_memory(&mut conn, rewritten);
+
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryRecordsOffered {
+            ids: vec!["previous-pane".to_string(), "rewritten-pane".to_string()],
+            app_run_id: "previous-run".to_string(),
+            offered_run_id: "current-run".to_string(),
+        },
+        &mut conn,
+    )
+    .expect("offered marker should be written");
+
+    let records = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .session_memory_records;
+    let offered = |id: &str| {
+        records
+            .iter()
+            .find(|record| record.id == id)
+            .expect("record should exist")
+            .recovery_offered_run_id
+            .clone()
+    };
+    assert_eq!(offered("previous-pane").as_deref(), Some("current-run"));
+    assert_eq!(offered("rewritten-pane"), None);
+}

@@ -19602,7 +19602,7 @@ impl Workspace {
         if !ctx.has_singleton_model::<SessionMemoryModel>() {
             return;
         }
-        let records = SessionMemoryModel::as_ref(ctx).startup_auto_restore_records();
+        let records = SessionMemoryModel::as_ref(ctx).startup_restore_candidates();
         if records.is_empty() {
             return;
         }

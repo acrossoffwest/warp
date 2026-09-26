@@ -195,21 +195,6 @@ pub struct SessionMemoryRecord {
 }
 
 impl SessionMemoryRecord {
-    pub fn normalize_terminal_agent_command(&mut self) {
-        if self.kind != SessionMemoryKind::Terminal
-            || self.source != SessionMemorySource::WarpTerminal
-        {
-            return;
-        }
-
-        let Some(agent_command) = terminal_agent_command(self.last_command.as_deref()) else {
-            return;
-        };
-
-        self.source = agent_command.source;
-        self.permission_mode = agent_command.permission_mode;
-    }
-
     pub fn is_agent(&self) -> bool {
         matches!(
             self.source,

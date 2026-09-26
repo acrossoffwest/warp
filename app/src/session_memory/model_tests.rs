@@ -53,46 +53,6 @@ fn startup_success_remains_success() {
 }
 
 #[test]
-fn startup_reclassifies_terminal_hosted_claude_command() {
-    let mut record = test_record("terminal-claude");
-    record.source = SessionMemorySource::WarpTerminal;
-    record.kind = SessionMemoryKind::Terminal;
-    record.status = SessionMemoryStatus::Live;
-    record.last_command = Some("claude --dangerously-skip-permissions".to_string());
-    record.permission_mode = AgentPermissionMode::Unknown;
-
-    let model = SessionMemoryModel::new(vec![record], None);
-
-    assert_eq!(model.records()[0].source, SessionMemorySource::ClaudeCode);
-    assert_eq!(model.records()[0].kind, SessionMemoryKind::Terminal);
-    assert_eq!(
-        model.records()[0].permission_mode,
-        AgentPermissionMode::Dangerous
-    );
-    assert_eq!(model.records()[0].status, SessionMemoryStatus::Interrupted);
-}
-
-#[test]
-fn startup_reclassifies_terminal_hosted_codex_command() {
-    let mut record = test_record("terminal-codex");
-    record.source = SessionMemorySource::WarpTerminal;
-    record.kind = SessionMemoryKind::Terminal;
-    record.last_command = Some(
-        "OPENAI_API_KEY=x codex --dangerously-bypass-approvals-and-sandbox resume".to_string(),
-    );
-    record.permission_mode = AgentPermissionMode::Unknown;
-
-    let model = SessionMemoryModel::new(vec![record], None);
-
-    assert_eq!(model.records()[0].source, SessionMemorySource::Codex);
-    assert_eq!(model.records()[0].kind, SessionMemoryKind::Terminal);
-    assert_eq!(
-        model.records()[0].permission_mode,
-        AgentPermissionMode::Dangerous
-    );
-}
-
-#[test]
 fn from_persisted_records_classifies_and_preserves_recovery_fields() {
     let mut record = test_record("codex-1");
     record.status = SessionMemoryStatus::Live;
@@ -183,123 +143,6 @@ fn interrupted_records_returns_only_interrupted_sessions() {
 }
 
 #[test]
-fn startup_auto_restore_records_only_returns_previous_unoffered_run() {
-    let mut previous = test_record("previous-run-session");
-    previous.source = SessionMemorySource::ClaudeCode;
-    previous.status = SessionMemoryStatus::Live;
-    previous.app_run_id = Some("previous-run".to_string());
-    previous.native_session_id = Some("previous-session-id".to_string());
-
-    let mut older = test_record("older-run-session");
-    older.source = SessionMemorySource::ClaudeCode;
-    older.status = SessionMemoryStatus::Live;
-    older.app_run_id = Some("older-run".to_string());
-    older.native_session_id = Some("older-session-id".to_string());
-
-    let mut already_offered = test_record("already-offered-session");
-    already_offered.source = SessionMemorySource::ClaudeCode;
-    already_offered.status = SessionMemoryStatus::Live;
-    already_offered.app_run_id = Some("previous-run".to_string());
-    already_offered.native_session_id = Some("already-offered-session-id".to_string());
-    already_offered.recovery_offered_run_id = Some("current-run".to_string());
-
-    let model = SessionMemoryModel::new_with_run_state(
-        vec![previous, older, already_offered],
-        None,
-        SessionMemoryRunState::new("current-run", Some("previous-run".to_string())),
-    );
-
-    let records = model.startup_auto_restore_records();
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].id, "previous-run-session");
-}
-
-#[test]
-fn startup_auto_restore_records_excludes_completed_agent_sessions() {
-    let mut ended = test_record("ended-claude-session");
-    ended.source = SessionMemorySource::ClaudeCode;
-    ended.status = SessionMemoryStatus::Live;
-    ended.app_run_id = Some("previous-run".to_string());
-    ended.native_session_id = Some("ended-session-id".to_string());
-    ended.completed_at = Some(1234);
-
-    let mut running = test_record("running-claude-session");
-    running.source = SessionMemorySource::ClaudeCode;
-    running.status = SessionMemoryStatus::Live;
-    running.app_run_id = Some("previous-run".to_string());
-    running.native_session_id = Some("running-session-id".to_string());
-
-    let model = SessionMemoryModel::new_with_run_state(
-        vec![ended, running],
-        None,
-        SessionMemoryRunState::new("current-run", Some("previous-run".to_string())),
-    );
-
-    let records = model.startup_auto_restore_records();
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].id, "running-claude-session");
-}
-
-#[test]
-fn upsert_removes_older_records_for_same_native_session() {
-    let mut old = test_record("old-pane-record");
-    old.native_session_id = Some("chat-1".to_string());
-    old.terminal_pane_uuid = Some(vec![1]);
-    old.last_seen_at = 100;
-
-    let mut unrelated = test_record("unrelated-record");
-    unrelated.native_session_id = Some("chat-2".to_string());
-
-    let mut model = SessionMemoryModel::new_with_run_state(
-        vec![old, unrelated],
-        None,
-        SessionMemoryRunState::new("current-run", None),
-    );
-
-    let mut new = test_record("new-pane-record");
-    new.native_session_id = Some("chat-1".to_string());
-    new.terminal_pane_uuid = Some(vec![2]);
-    new.last_seen_at = 200;
-    model.upsert(new);
-
-    let ids = model
-        .records()
-        .iter()
-        .map(|record| record.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["unrelated-record", "new-pane-record"]);
-}
-
-#[test]
-fn load_dedupes_records_sharing_native_session_keeping_newest() {
-    let mut old = test_record("old-duplicate");
-    old.native_session_id = Some("chat-1".to_string());
-    old.last_seen_at = 100;
-
-    let mut newest = test_record("newest-duplicate");
-    newest.native_session_id = Some("chat-1".to_string());
-    newest.last_seen_at = 200;
-
-    let mut no_native = test_record("plain-terminal");
-    no_native.native_session_id = None;
-
-    let model = SessionMemoryModel::new_with_run_state(
-        vec![old, newest, no_native],
-        None,
-        SessionMemoryRunState::new("current-run", None),
-    );
-
-    let ids = model
-        .records()
-        .iter()
-        .map(|record| record.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["newest-duplicate", "plain-terminal"]);
-}
-
-#[test]
 fn should_suppress_restored_tab_only_when_every_pane_was_closed_intentionally() {
     let mut closed = test_record("closed-terminal");
     closed.terminal_pane_uuid = Some(vec![1, 1, 1, 1]);
@@ -326,76 +169,6 @@ fn should_suppress_restored_tab_only_when_every_pane_was_closed_intentionally() 
 }
 
 #[test]
-fn startup_auto_restore_records_includes_resumable_sessions_from_clean_previous_run() {
-    let mut claude = test_record("claude-session");
-    claude.source = SessionMemorySource::ClaudeCode;
-    claude.kind = SessionMemoryKind::Terminal;
-    claude.status = SessionMemoryStatus::Live;
-    claude.app_run_id = Some("previous-clean-run".to_string());
-    claude.native_session_id = Some("claude-session-id".to_string());
-
-    let mut tmux = test_record("tmux-session");
-    tmux.source = SessionMemorySource::WarpTerminal;
-    tmux.status = SessionMemoryStatus::Live;
-    tmux.app_run_id = Some("previous-clean-run".to_string());
-    tmux.last_command = Some("tmux attach -t work".to_string());
-
-    let mut plain_terminal = test_record("plain-terminal");
-    plain_terminal.source = SessionMemorySource::WarpTerminal;
-    plain_terminal.status = SessionMemoryStatus::Live;
-    plain_terminal.app_run_id = Some("previous-clean-run".to_string());
-    plain_terminal.last_command = Some("cargo check -p warp".to_string());
-
-    let model = SessionMemoryModel::new_with_run_state(
-        vec![claude, tmux, plain_terminal],
-        None,
-        SessionMemoryRunState::with_previous_run(
-            "current-run",
-            Some("previous-clean-run".to_string()),
-            None,
-        ),
-    );
-
-    let records = model.startup_auto_restore_records();
-    let ids = records
-        .iter()
-        .map(|record| record.id.as_str())
-        .collect::<Vec<_>>();
-
-    assert_eq!(ids, vec!["claude-session", "tmux-session"]);
-}
-
-#[test]
-fn startup_auto_restore_records_includes_recent_resumable_agent_from_older_run() {
-    let mut claude = test_record("recent-claude-session");
-    claude.source = SessionMemorySource::ClaudeCode;
-    claude.kind = SessionMemoryKind::AgentChat;
-    claude.status = SessionMemoryStatus::Live;
-    claude.app_run_id = Some("older-run".to_string());
-    claude.native_session_id = Some("claude-session-id".to_string());
-    claude.last_seen_at = current_unix_seconds();
-
-    let mut stale = claude.clone();
-    stale.id = "stale-claude-session".to_string();
-    stale.last_seen_at = current_unix_seconds() - 31 * 60;
-
-    let model = SessionMemoryModel::new_with_run_state(
-        vec![claude, stale],
-        None,
-        SessionMemoryRunState::with_previous_run(
-            "current-run",
-            Some("previous-run".to_string()),
-            None,
-        ),
-    );
-
-    let records = model.startup_auto_restore_records();
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].id, "recent-claude-session");
-}
-
-#[test]
 fn mark_startup_recovery_offered_persists_one_shot_marker() {
     let (sender, receiver) = sync_channel(1);
     let event_sink = SessionMemoryModel::persistence_event_sink(Some(sender))
@@ -416,14 +189,16 @@ fn mark_startup_recovery_offered_persists_one_shot_marker() {
         Some("current-run")
     );
     match receiver.recv().unwrap() {
-        ModelEvent::UpsertSessionMemoryRecord { record } => {
-            assert_eq!(record.id, "previous-run-session");
-            assert_eq!(
-                record.recovery_offered_run_id.as_deref(),
-                Some("current-run")
-            );
+        ModelEvent::MarkSessionMemoryRecordsOffered {
+            ids,
+            app_run_id,
+            offered_run_id,
+        } => {
+            assert_eq!(ids, vec!["previous-run-session".to_string()]);
+            assert_eq!(app_run_id, "previous-run");
+            assert_eq!(offered_run_id, "current-run");
         }
-        event => panic!("expected session memory upsert event, got {event:?}"),
+        event => panic!("expected session memory offered event, got {event:?}"),
     }
 }
 
@@ -555,6 +330,130 @@ fn upsert_and_notify_emits_model_event_for_board_subscribers() {
         );
         assert!(receiver.try_recv().is_err());
     });
+}
+
+#[test]
+fn startup_restore_candidates_only_include_previous_run() {
+    let model = model_with_previous_run(vec![
+        agent_record("previous-run-agent", "previous-run"),
+        agent_record("older-run-agent", "older-run"),
+        agent_record("current-run-agent", "current-run"),
+    ]);
+
+    assert_eq!(candidate_ids(&model), vec!["previous-run-agent"]);
+}
+
+#[test]
+fn startup_restore_candidates_exclude_recent_agents_from_older_runs() {
+    let mut recent_older = agent_record("recent-older-run-agent", "older-run");
+    recent_older.last_seen_at = current_unix_seconds();
+    let model = model_with_previous_run(vec![recent_older]);
+
+    assert!(model.startup_restore_candidates().is_empty());
+}
+
+#[test]
+fn startup_restore_candidates_include_idle_agents_and_skip_terminals() {
+    let mut idle = agent_record("idle-claude", "previous-run");
+    idle.status = SessionMemoryStatus::Success;
+    let mut blocked = agent_record("blocked-codex", "previous-run");
+    blocked.source = SessionMemorySource::Codex;
+    blocked.status = SessionMemoryStatus::Blocked;
+    let mut tmux = agent_record("tmux-terminal", "previous-run");
+    tmux.source = SessionMemorySource::WarpTerminal;
+    tmux.kind = SessionMemoryKind::Terminal;
+    tmux.last_command = Some("tmux attach -t work".to_string());
+    let mut restored_block = agent_record("restored-claude-block", "previous-run");
+    restored_block.source = SessionMemorySource::WarpTerminal;
+    restored_block.kind = SessionMemoryKind::Terminal;
+    restored_block.last_command = Some("claude --resume abc".to_string());
+    let model = model_with_previous_run(vec![idle, blocked, tmux, restored_block]);
+
+    assert_eq!(candidate_ids(&model), vec!["idle-claude", "blocked-codex"]);
+}
+
+#[test]
+fn startup_restore_candidates_exclude_ended_closed_and_offered_agents() {
+    let mut ended = agent_record("ended-agent", "previous-run");
+    ended.completed_at = Some(150);
+    let mut closed = agent_record("closed-agent", "previous-run");
+    closed.closed_intentionally_at = Some(150);
+    let mut offered = agent_record("offered-agent", "previous-run");
+    offered.recovery_offered_run_id = Some("current-run".to_string());
+    let open = agent_record("open-agent", "previous-run");
+    let model = model_with_previous_run(vec![ended, closed, offered, open]);
+
+    assert_eq!(candidate_ids(&model), vec!["open-agent"]);
+}
+
+#[test]
+fn startup_restore_candidates_keep_newest_record_per_native_session() {
+    let mut old = agent_record("old-pane", "previous-run");
+    old.native_session_id = Some("chat-1".to_string());
+    old.last_seen_at = 100;
+    let mut new = agent_record("new-pane", "previous-run");
+    new.native_session_id = Some("chat-1".to_string());
+    new.last_seen_at = 200;
+    let mut other = agent_record("other-pane", "previous-run");
+    other.native_session_id = Some("chat-2".to_string());
+    let model = model_with_previous_run(vec![old, new, other]);
+
+    assert_eq!(candidate_ids(&model), vec!["new-pane", "other-pane"]);
+    assert_eq!(model.records().len(), 3);
+}
+
+#[test]
+fn startup_restore_candidates_without_previous_run_are_empty() {
+    let model = SessionMemoryModel::new_with_run_state(
+        vec![agent_record("agent", "previous-run")],
+        None,
+        SessionMemoryRunState::with_previous_run("current-run", None, None),
+    );
+
+    assert!(model.startup_restore_candidates().is_empty());
+}
+
+#[test]
+fn previous_run_native_session_ids_collects_only_previous_run_ids() {
+    let mut previous = agent_record("previous", "previous-run");
+    previous.native_session_id = Some("previous-id".to_string());
+    let mut older = agent_record("older", "older-run");
+    older.native_session_id = Some("older-id".to_string());
+    let model = model_with_previous_run(vec![previous, older]);
+
+    let ids = model.previous_run_native_session_ids();
+
+    assert!(ids.contains("previous-id"));
+    assert!(!ids.contains("older-id"));
+}
+
+fn agent_record(id: &str, app_run_id: &str) -> SessionMemoryRecord {
+    let mut record = test_record(id);
+    record.source = SessionMemorySource::ClaudeCode;
+    record.kind = SessionMemoryKind::AgentChat;
+    record.status = SessionMemoryStatus::Live;
+    record.app_run_id = Some(app_run_id.to_string());
+    record
+}
+
+fn model_with_previous_run(records: Vec<SessionMemoryRecord>) -> SessionMemoryModel {
+    SessionMemoryModel::new_with_run_state(
+        records,
+        None,
+        SessionMemoryRunState::with_previous_run(
+            "current-run",
+            Some("previous-run".to_string()),
+            None,
+        ),
+    )
+}
+
+fn candidate_ids(model: &SessionMemoryModel) -> Vec<String> {
+    model
+        .startup_restore_candidates()
+        .into_iter()
+        .map(|record| record.id)
+        .collect()
 }
 
 fn test_record(id: &str) -> SessionMemoryRecord {
