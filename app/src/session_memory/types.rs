@@ -197,10 +197,9 @@ pub fn is_agent_maintenance_command(source: SessionMemorySource, command: &str) 
                 | "migrate-installer",
             ),
         ) => true,
-        (
-            SessionMemorySource::Codex,
-            Some("login" | "logout" | "mcp" | "completion" | "apply"),
-        ) => true,
+        (SessionMemorySource::Codex, Some("login" | "logout" | "mcp" | "completion" | "apply")) => {
+            true
+        }
         _ => false,
     }
 }
@@ -248,9 +247,8 @@ impl SessionMemoryRecord {
         if self.completed_at.is_some() {
             return;
         }
-        let new_agent_started = self.is_agent()
-            && self.started_at.is_some()
-            && self.started_at != existing.started_at;
+        let new_agent_started =
+            self.is_agent() && self.started_at.is_some() && self.started_at != existing.started_at;
         if new_agent_started {
             return;
         }

@@ -672,7 +672,9 @@ fn resolve_missing_session_ids_matches_file_created_after_record_was_last_writte
     record.last_seen_at = 100;
     let mut candidates = vec![record];
 
-    resolve(&mut candidates, &[], |_, _| vec![session_file(SESSION_A, 201)]);
+    resolve(&mut candidates, &[], |_, _| {
+        vec![session_file(SESSION_A, 201)]
+    });
 
     assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_A));
 }
@@ -758,7 +760,10 @@ fn continue_is_allowed_when_newest_file_of_previous_run_is_unclaimed() {
         vec![session_file_modified(SESSION_A, 60, 700)]
     });
 
-    assert!(folders.contains(&(SessionMemorySource::ClaudeCode, tempdir.path().to_path_buf())));
+    assert!(folders.contains(&(
+        SessionMemorySource::ClaudeCode,
+        tempdir.path().to_path_buf()
+    )));
 }
 
 #[test]
@@ -800,7 +805,10 @@ fn continue_is_refused_when_newest_file_belongs_to_another_pane() {
         .map(|(_, target)| target.clone());
     match idless_target {
         Some(StartupRestoreTarget::ExistingPane { plan, .. }) => {
-            assert_eq!(plan.command(), Some("claude --dangerously-skip-permissions"));
+            assert_eq!(
+                plan.command(),
+                Some("claude --dangerously-skip-permissions")
+            );
         }
         other => panic!("expected existing pane, got {other:?}"),
     }
@@ -817,7 +825,11 @@ fn continue_is_refused_when_newest_file_predates_previous_run() {
     )];
 
     let folders = resolve(&mut candidates, &[], |_, _| {
-        vec![session_file_modified(SESSION_A, 10, PREVIOUS_RUN_STARTED_AT - 1)]
+        vec![session_file_modified(
+            SESSION_A,
+            10,
+            PREVIOUS_RUN_STARTED_AT - 1,
+        )]
     });
 
     assert!(folders.is_empty());
@@ -885,7 +897,10 @@ fn startup_restore_continue_slot_uses_canonical_folder() {
     older.cwd = Some(tempdir.path().join("."));
     older.terminal_pane_uuid = Some(vec![2]);
     older.last_seen_at = 100;
-    let folders = HashSet::from([(SessionMemorySource::ClaudeCode, tempdir.path().to_path_buf())]);
+    let folders = HashSet::from([(
+        SessionMemorySource::ClaudeCode,
+        tempdir.path().to_path_buf(),
+    )]);
 
     let targets = plan_startup_restore(
         &[newer, older],
@@ -919,8 +934,14 @@ fn session_file_mtime_floor_uses_earliest_start_and_previous_run() {
         current_run_started_at: CURRENT_RUN_STARTED_AT,
     };
 
-    assert_eq!(session_file_mtime_floor([&record], bounds(Some(50))), Some(48));
-    assert_eq!(session_file_mtime_floor([&record], bounds(Some(500))), Some(98));
+    assert_eq!(
+        session_file_mtime_floor([&record], bounds(Some(50))),
+        Some(48)
+    );
+    assert_eq!(
+        session_file_mtime_floor([&record], bounds(Some(500))),
+        Some(98)
+    );
     assert_eq!(session_file_mtime_floor([], bounds(None)), None);
 }
 

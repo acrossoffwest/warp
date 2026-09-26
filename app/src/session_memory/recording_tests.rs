@@ -244,7 +244,11 @@ fn agent_maintenance_subcommands_record_terminal() {
         for session in [None, Some(session)] {
             let record = pane_session_memory_record(input(Some(command), Some(10), None, session));
 
-            assert_eq!(record.source, SessionMemorySource::WarpTerminal, "{command}");
+            assert_eq!(
+                record.source,
+                SessionMemorySource::WarpTerminal,
+                "{command}"
+            );
             assert_eq!(record.kind, SessionMemoryKind::Terminal, "{command}");
         }
     }

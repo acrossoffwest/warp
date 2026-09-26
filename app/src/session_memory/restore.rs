@@ -380,9 +380,9 @@ pub fn plan_startup_restore<W: Clone>(
         .into_iter()
         .map(|record| {
             let folder = record.cwd.as_deref().map(&folder_key);
-            let continue_allowed = folder.as_ref().is_some_and(|folder| {
-                continue_folders.contains(&(record.source, folder.clone()))
-            });
+            let continue_allowed = folder
+                .as_ref()
+                .is_some_and(|folder| continue_folders.contains(&(record.source, folder.clone())));
             let key = (record.source, folder);
             let target = startup_restore_target(
                 record,

@@ -152,21 +152,18 @@ pub fn initialize(
                 persisted_data.session_memory_run_state = session_memory_run_state;
             }
 
-            let writer_handles = match start_writer(
-                conn,
-                database_path.clone(),
-                session_memory_run_id,
-            ) {
-                Ok(writer_handles) => Some(writer_handles),
-                Err(err) => {
-                    send_telemetry_from_app_ctx!(
-                        TelemetryEvent::DatabaseWriteError(err.to_string()),
-                        ctx
-                    );
-                    report_db_error("starting writer", err, &database_path);
-                    None
-                }
-            };
+            let writer_handles =
+                match start_writer(conn, database_path.clone(), session_memory_run_id) {
+                    Ok(writer_handles) => Some(writer_handles),
+                    Err(err) => {
+                        send_telemetry_from_app_ctx!(
+                            TelemetryEvent::DatabaseWriteError(err.to_string()),
+                            ctx
+                        );
+                        report_db_error("starting writer", err, &database_path);
+                        None
+                    }
+                };
 
             // Persist any read-time-derived conversation summaries so the
             // derivation only happens once per pre-`summary`-column row.
@@ -1183,7 +1180,9 @@ fn mark_session_memory_agent_ended(
     let running_agent = dsl::session_memory_records
         .filter(dsl::id.eq(record_id))
         .filter(dsl::completed_at.is_null())
-        .filter(dsl::source.ne(session_memory_source_to_db(SessionMemorySource::WarpTerminal)));
+        .filter(dsl::source.ne(session_memory_source_to_db(
+            SessionMemorySource::WarpTerminal,
+        )));
     let updated = diesel::update(running_agent.filter(dsl::started_at.eq(started_at)))
         .set(ended.clone())
         .execute(conn)?;

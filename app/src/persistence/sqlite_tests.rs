@@ -1321,8 +1321,8 @@ fn session_memory_record_upsert_clears_previously_set_optional_fields() {
 #[test]
 fn session_memory_agent_end_survives_later_snapshot_upsert() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let record = session_memory_agent_record(Some(100));
 
     upsert_session_memory(&mut conn, record.clone());
@@ -1346,8 +1346,8 @@ fn session_memory_agent_end_survives_later_snapshot_upsert() {
 #[test]
 fn session_memory_new_agent_start_clears_previous_end() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let record = session_memory_agent_record(Some(100));
 
     upsert_session_memory(&mut conn, record.clone());
@@ -1371,8 +1371,8 @@ fn session_memory_new_agent_start_clears_previous_end() {
 #[test]
 fn session_memory_agent_end_ignores_other_block_start() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let record = session_memory_agent_record(Some(100));
 
     upsert_session_memory(&mut conn, record.clone());
@@ -1395,8 +1395,8 @@ fn session_memory_agent_end_ignores_other_block_start() {
 #[test]
 fn session_memory_agent_end_survives_terminal_snapshot_between_agent_snapshots() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let record = session_memory_agent_record(Some(100));
 
     upsert_session_memory(&mut conn, record.clone());
@@ -1428,8 +1428,8 @@ fn session_memory_agent_end_survives_terminal_snapshot_between_agent_snapshots()
 #[test]
 fn session_memory_agent_end_event_ignores_warp_terminal_source() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let mut record = session_memory_agent_record(Some(100));
     record.source = SessionMemorySource::WarpTerminal;
     record.kind = SessionMemoryKind::Terminal;
@@ -1453,8 +1453,8 @@ fn session_memory_agent_end_event_ignores_warp_terminal_source() {
 #[test]
 fn session_memory_agent_end_event_does_not_overwrite_existing_completed_at() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let record = session_memory_agent_record(Some(100));
 
     upsert_session_memory(&mut conn, record.clone());
@@ -1486,8 +1486,8 @@ fn session_memory_agent_end_event_does_not_overwrite_existing_completed_at() {
 #[test]
 fn session_memory_terminal_snapshot_after_agent_end_keeps_agent_card() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let record = session_memory_agent_record(Some(100));
     upsert_session_memory(&mut conn, record.clone());
     handle_model_event(
@@ -1524,8 +1524,8 @@ fn session_memory_terminal_snapshot_after_agent_end_keeps_agent_card() {
 #[test]
 fn session_memory_agent_end_applies_to_unknown_start_of_same_command() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
     let record = session_memory_agent_record(None);
     upsert_session_memory(&mut conn, record.clone());
 
@@ -1654,8 +1654,8 @@ fn session_memory_app_run_tracks_recoverable_previous_run() {
 #[test]
 fn non_app_launch_does_not_create_session_memory_app_run() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
 
     let run_state = begin_session_memory_run(&mut conn, false);
 
@@ -1666,8 +1666,8 @@ fn non_app_launch_does_not_create_session_memory_app_run() {
 #[test]
 fn app_launch_creates_one_session_memory_app_run() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
-        .expect("database should initialize");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
 
     let first = begin_session_memory_run(&mut conn, true);
     let second = begin_session_memory_run(&mut conn, true);

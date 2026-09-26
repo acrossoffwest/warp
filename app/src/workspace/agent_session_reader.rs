@@ -640,8 +640,8 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("state_5.sqlite");
-        let mut conn = diesel::sqlite::SqliteConnection::establish(db_path.to_str().unwrap())
-            .unwrap();
+        let mut conn =
+            diesel::sqlite::SqliteConnection::establish(db_path.to_str().unwrap()).unwrap();
         diesel::sql_query(
             "CREATE TABLE threads (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, \
              updated_at INTEGER NOT NULL, cwd TEXT NOT NULL, \
