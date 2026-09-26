@@ -3165,6 +3165,11 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
                 .iter()
                 .any(is_cloud_agent_web_home_launch_url);
             let app_state = if should_skip_restore { None } else { app_state };
+            let layout_restored =
+                crate::workspace::view::session_memory_startup::layout_was_restored(
+                    app_state.as_ref(),
+                    *GeneralSettings::as_ref(ctx).restore_session,
+                );
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };
             ctx.dispatch_global_action("root_view:open_from_restored", &arg);
@@ -3181,7 +3186,10 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
                 ctx.dispatch_global_action("root_view:open_new", &());
             }
             if matches!(launch_mode, LaunchMode::App { .. }) {
-                crate::workspace::view::session_memory_startup::restore_open_agent_sessions(ctx);
+                crate::workspace::view::session_memory_startup::restore_open_agent_sessions(
+                    layout_restored,
+                    ctx,
+                );
             }
 
             IntervalTimer::handle(ctx).update(ctx, |timer, _| {
