@@ -4291,7 +4291,9 @@ impl Workspace {
                 // The window snapshot can be stale (crash / force-kill), while
                 // session memory close markers are written the moment a pane
                 // is closed. Skip tabs whose panes the user already closed.
-                let suppress_tab = {
+                let suppress_tab = if !ctx.has_singleton_model::<SessionMemoryModel>() {
+                    vec![false; window_snapshot.tabs.len()]
+                } else {
                     let session_memory = SessionMemoryModel::as_ref(ctx);
                     window_snapshot
                         .tabs
@@ -10928,29 +10930,30 @@ impl Workspace {
                     }
                 })
                 .map(|ws| {
-                    let path_str = truncate_path_from_start(&abbreviate_home_path(&ws.path), 48);
+                    let path_str = ws.path.to_string_lossy().into_owned();
+                    let display = user_friendly_path(&path_str, home.as_deref()).into_owned();
                     let fields = if let Some(agent) = cli_agent {
                         let action = NewSessionSidecarSelection::LaunchCLIAgentInDirectory {
                             agent,
                             directory: ws.path.clone(),
                         };
                         if agent.supports_resume() {
-                            MenuItemFields::new_submenu(path_str.clone())
-                                .with_icon(icons::Icon::Folder)
-                                .with_on_select_action(action)
+                            MenuItemFields::new_submenu(display).with_on_select_action(action)
                         } else {
-                            MenuItemFields::new(path_str.clone())
-                                .with_icon(icons::Icon::Folder)
-                                .with_on_select_action(action)
+                            MenuItemFields::new(display).with_on_select_action(action)
                         }
                     } else {
-                        MenuItemFields::new(path_str.clone())
-                            .with_icon(icons::Icon::Folder)
-                            .with_on_select_action(NewSessionSidecarSelection::OpenWorktreeRepo {
-                                repo_path: path_str,
-                            })
+                        MenuItemFields::new(display).with_on_select_action(
+                            NewSessionSidecarSelection::OpenWorktreeRepo {
+                                repo_path: path_str.clone(),
+                            },
+                        )
                     };
-                    fields.into_item()
+                    fields
+                        .with_icon(icons::Icon::Folder)
+                        .with_clip_config(ClipConfig::start())
+                        .with_tooltip(path_str)
+                        .into_item()
                 })
                 .collect::<Vec<_>>(),
         );
@@ -19542,6 +19545,9 @@ impl Workspace {
     }
 
     fn enrich_session_memory_records_from_agent_index(&mut self, ctx: &mut ViewContext<Self>) {
+        if !ctx.has_singleton_model::<SessionMemoryModel>() {
+            return;
+        }
         let enriched_records = SessionMemoryModel::as_ref(ctx)
             .records()
             .iter()
@@ -19593,6 +19599,9 @@ impl Workspace {
     }
 
     fn auto_restore_startup_session_memory(&mut self, ctx: &mut ViewContext<Self>) {
+        if !ctx.has_singleton_model::<SessionMemoryModel>() {
+            return;
+        }
         let records = SessionMemoryModel::as_ref(ctx).startup_auto_restore_records();
         if records.is_empty() {
             return;
@@ -19696,6 +19705,9 @@ impl Workspace {
     }
 
     fn open_session_memory_board(&mut self, ctx: &mut ViewContext<Self>) {
+        if !ctx.has_singleton_model::<SessionMemoryModel>() {
+            return;
+        }
         self.close_palette(false, Some("workspace:show_session_memory"), ctx);
         self.close_all_overlays(ctx);
         self.enrich_session_memory_records_from_agent_index(ctx);
@@ -19738,6 +19750,9 @@ impl Workspace {
         id: &str,
         ctx: &AppContext,
     ) -> Option<SessionMemoryRecord> {
+        if !ctx.has_singleton_model::<SessionMemoryModel>() {
+            return None;
+        }
         SessionMemoryModel::as_ref(ctx)
             .records()
             .iter()
@@ -19918,6 +19933,9 @@ impl Workspace {
     }
 
     fn delete_session_memory_record(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        if !ctx.has_singleton_model::<SessionMemoryModel>() {
+            return;
+        }
         SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| model.delete_and_notify(id, ctx));
 
         if let Some(board) = &self.session_memory_board {

@@ -12484,7 +12484,9 @@ impl TerminalView {
                     let ended_native_session_id = CLIAgentSessionsModel::as_ref(ctx)
                         .session(self.view_id)
                         .and_then(|session| session.session_context.session_id.clone());
-                    if let Some(native_session_id) = ended_native_session_id {
+                    if let Some(native_session_id) = ended_native_session_id
+                        && ctx.has_singleton_model::<crate::SessionMemoryModel>()
+                    {
                         crate::SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| {
                             model.mark_agent_session_ended_for_native_session_and_notify(
                                 &native_session_id,

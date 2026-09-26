@@ -219,7 +219,9 @@ fn cli_agent_session_memory_record(
         started_at: None,
         completed_at: None,
         closed_intentionally_at: None,
-        app_run_id: Some(SessionMemoryModel::as_ref(ctx).current_run_id().to_string()),
+        app_run_id: ctx
+            .has_singleton_model::<SessionMemoryModel>()
+            .then(|| SessionMemoryModel::as_ref(ctx).current_run_id().to_string()),
         recovery_offered_run_id: None,
         restore_payload: None,
     })
@@ -446,7 +448,9 @@ impl TerminalPane {
             started_at: None,
             completed_at: None,
             closed_intentionally_at: None,
-            app_run_id: Some(SessionMemoryModel::as_ref(ctx).current_run_id().to_string()),
+            app_run_id: ctx
+                .has_singleton_model::<SessionMemoryModel>()
+                .then(|| SessionMemoryModel::as_ref(ctx).current_run_id().to_string()),
             recovery_offered_run_id: None,
             restore_payload,
         };
