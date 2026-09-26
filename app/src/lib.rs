@@ -3180,6 +3180,9 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
             if ctx.window_ids().count() == 0 {
                 ctx.dispatch_global_action("root_view:open_new", &());
             }
+            if matches!(launch_mode, LaunchMode::App { .. }) {
+                crate::workspace::view::session_memory_startup::restore_open_agent_sessions(ctx);
+            }
 
             IntervalTimer::handle(ctx).update(ctx, |timer, _| {
                 timer.mark_interval_end("WINDOWS_CREATED");

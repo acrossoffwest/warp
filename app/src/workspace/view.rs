@@ -16,6 +16,7 @@ pub(crate) mod openwarp_launch_modal;
 pub(crate) mod orchestration_launch_modal;
 pub(crate) mod right_panel;
 pub(crate) mod session_memory_board;
+pub(crate) mod session_memory_startup;
 pub(crate) mod session_memory_transcript;
 mod startup_directory;
 mod tab_grouping;
@@ -552,13 +553,8 @@ use crate::{
 
 use crate::pane_group::{SessionMemoryPane, SessionMemoryTranscriptPane};
 use crate::session_memory::model::SessionMemoryModel;
-use crate::session_memory::restore::{
-    RestoreError, RestorePlan, RestoredTerminalPane, StartupRestoreAction, restore_plan_for_record,
-    startup_restore_action_for_record,
-};
-use crate::session_memory::types::{
-    SessionMemoryKind, SessionMemoryRecord, SessionMemorySource, user_command,
-};
+use crate::session_memory::restore::{RestoreError, RestorePlan, restore_plan_for_record};
+use crate::session_memory::types::{SessionMemoryRecord, user_command};
 use crate::terminal::CLIAgent;
 use crate::workspace::view::session_memory_board::{
     SessionMemoryBoard, SessionMemoryBoardAction, rows_from_records,
@@ -3780,9 +3776,6 @@ impl Workspace {
         WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
             registry.register(window_id, weak_handle);
         });
-
-        ws.enrich_session_memory_records_from_agent_index(ctx);
-        ws.auto_restore_startup_session_memory(ctx);
 
         ws
     }
@@ -19544,151 +19537,10 @@ impl Workspace {
         self.show_settings_with_section(None, ctx);
     }
 
-    fn enrich_session_memory_records_from_agent_index(&mut self, ctx: &mut ViewContext<Self>) {
-        if !ctx.has_singleton_model::<SessionMemoryModel>() {
-            return;
-        }
-        let enriched_records = SessionMemoryModel::as_ref(ctx)
-            .records()
-            .iter()
-            .filter_map(Self::enrich_session_memory_record_from_agent_index)
-            .collect::<Vec<_>>();
-
-        if enriched_records.is_empty() {
-            return;
-        }
-
-        SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| {
-            for record in enriched_records {
-                model.upsert_and_notify(record, ctx);
-            }
-        });
-    }
-
-    fn enrich_session_memory_record_from_agent_index(
-        record: &SessionMemoryRecord,
-    ) -> Option<SessionMemoryRecord> {
-        const MAX_AGENT_INDEX_MATCH_DRIFT_SECONDS: u64 = 48 * 60 * 60;
-
-        if record.kind != SessionMemoryKind::Terminal || record.native_session_id.is_some() {
-            return None;
-        }
-
-        let agent = match record.source {
-            SessionMemorySource::ClaudeCode => CLIAgent::Claude,
-            SessionMemorySource::Codex => CLIAgent::Codex,
-            SessionMemorySource::WarpTerminal => return None,
-        };
-        let cwd = record.cwd.as_ref()?;
-        let entry = crate::workspace::agent_session_reader::read_all_sessions(agent, cwd)
-            .into_iter()
-            .filter(|entry| {
-                entry.updated_at.abs_diff(record.last_seen_at)
-                    <= MAX_AGENT_INDEX_MATCH_DRIFT_SECONDS
-            })
-            .max_by_key(|entry| entry.updated_at)?;
-
-        let mut record = record.clone();
-        record.kind = SessionMemoryKind::AgentChat;
-        record.title = entry.title;
-        record.cwd = entry.cwd;
-        record.native_session_id = Some(entry.session_id);
-        record.transcript_path = entry.transcript_path;
-        record.launch_argv = entry.launch_argv;
-        Some(record)
-    }
-
-    fn auto_restore_startup_session_memory(&mut self, ctx: &mut ViewContext<Self>) {
-        if !ctx.has_singleton_model::<SessionMemoryModel>() {
-            return;
-        }
-        let records = SessionMemoryModel::as_ref(ctx).startup_restore_candidates();
-        if records.is_empty() {
-            return;
-        }
-
-        let layout_restore_enabled = *GeneralSettings::as_ref(ctx).restore_session;
-        let mut restored_terminal_panes = if layout_restore_enabled {
-            self.restored_terminal_pane_targets(ctx)
-        } else {
-            Vec::new()
-        };
-
-        let mut offered_ids = Vec::new();
-        for record in records {
-            let action = match startup_restore_action_for_record(
-                &record,
-                &restored_terminal_panes,
-                *AISettings::as_ref(ctx).session_memory_auto_run_restored_commands,
-                layout_restore_enabled,
-            ) {
-                Ok(action) => action,
-                Err(err) => {
-                    log::warn!(
-                        "Skipping startup session memory restore for {}: {}",
-                        record.id,
-                        Self::restore_error_message(err)
-                    );
-                    continue;
-                }
-            };
-
-            match action {
-                StartupRestoreAction::ExistingPane {
-                    terminal_pane_uuid,
-                    plan,
-                } => {
-                    log::info!(
-                        "Session memory startup restore: applying record {} to existing pane",
-                        record.id
-                    );
-                    offered_ids.push(record.id.clone());
-                    restored_terminal_panes.retain(|pane| pane.uuid != terminal_pane_uuid);
-                    if let Some(terminal_view) =
-                        self.terminal_view_for_session_uuid(&terminal_pane_uuid, ctx)
-                    {
-                        terminal_view.update(ctx, |terminal_view, ctx| {
-                            Self::apply_restore_plan_to_terminal(terminal_view, &plan, ctx);
-                        });
-                    } else {
-                        self.restore_session_memory_plan(&plan, false, ctx);
-                    }
-                }
-                StartupRestoreAction::AlreadyRestoredPane { terminal_pane_uuid } => {
-                    log::info!(
-                        "Session memory startup restore: record {} already restored by layout",
-                        record.id
-                    );
-                    offered_ids.push(record.id.clone());
-                    restored_terminal_panes.retain(|pane| pane.uuid != terminal_pane_uuid);
-                }
-                StartupRestoreAction::NewPane { plan } => {
-                    log::info!(
-                        "Session memory startup restore: opening new pane for record {}",
-                        record.id
-                    );
-                    if self.restore_session_memory_plan(&plan, false, ctx) {
-                        offered_ids.push(record.id.clone());
-                    }
-                }
-            }
-        }
-
-        if !offered_ids.is_empty() {
-            SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| {
-                model.mark_startup_recovery_offered_and_notify(&offered_ids, ctx);
-            });
-        }
-    }
-
-    fn restored_terminal_pane_targets(&self, ctx: &AppContext) -> Vec<RestoredTerminalPane> {
+    fn terminal_pane_session_uuids(&self, ctx: &AppContext) -> Vec<Vec<u8>> {
         self.tabs
             .iter()
-            .flat_map(|tab| {
-                tab.pane_group
-                    .as_ref(ctx)
-                    .restored_terminal_pane_targets(ctx)
-            })
+            .flat_map(|tab| tab.pane_group.as_ref(ctx).terminal_pane_session_uuids())
             .collect()
     }
 
@@ -19710,7 +19562,6 @@ impl Workspace {
         }
         self.close_palette(false, Some("workspace:show_session_memory"), ctx);
         self.close_all_overlays(ctx);
-        self.enrich_session_memory_records_from_agent_index(ctx);
 
         if let Some(board) = &self.session_memory_board {
             let rows = rows_from_records(SessionMemoryModel::as_ref(ctx).records());

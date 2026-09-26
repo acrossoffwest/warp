@@ -120,7 +120,6 @@ use crate::server::telemetry::{
 };
 use crate::session_management::CommandContext;
 use crate::session_management::SessionNavigationData;
-use crate::session_memory::restore::RestoredTerminalPane;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
@@ -1183,26 +1182,6 @@ impl PaneGroup {
             .collect()
     }
 
-    pub fn restored_terminal_pane_targets(&self, ctx: &AppContext) -> Vec<RestoredTerminalPane> {
-        self.pane_contents
-            .values()
-            .filter_map(|contents| {
-                let pane = contents.as_any().downcast_ref::<TerminalPane>()?;
-                let terminal_view = pane.terminal_view(ctx);
-                Some(RestoredTerminalPane {
-                    uuid: pane.session_uuid(),
-                    // At startup the restored shell has not bootstrapped yet, so
-                    // the live pwd is unknown; fall back to the snapshot cwd.
-                    cwd: terminal_view
-                        .as_ref(ctx)
-                        .pwd_if_local(ctx)
-                        .map(PathBuf::from)
-                        .or_else(|| pane.restored_cwd()),
-                })
-            })
-            .collect()
-    }
-
     pub fn terminal_view_for_session_uuid(
         &self,
         uuid: &[u8],
@@ -1702,7 +1681,6 @@ impl PaneGroup {
                     .cwd
                     .map(PathBuf::from)
                     .filter(|path| path.is_dir());
-                let restored_cwd = startup_directory.clone();
 
                 // Filter conversation IDs to only include those that have task messages
                 // and are not entirely passive (ignored suggestions).
@@ -1761,14 +1739,13 @@ impl PaneGroup {
 
                 let terminal_view_id = terminal_view.id();
 
-                let mut pane_data = TerminalPane::new(
+                let pane_data = TerminalPane::new(
                     uuid.0,
                     terminal_manager,
                     terminal_view,
                     model_event_sender,
                     ctx,
                 );
-                pane_data.set_restored_cwd(restored_cwd);
 
                 let terminal_pane_id = pane_data.terminal_pane_id();
                 let pane_id = terminal_pane_id.into();

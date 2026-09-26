@@ -102,11 +102,6 @@ pub struct TerminalPane {
     /// Used to uniquely identify the pane, even across separate runs of the app.
     uuid: Vec<u8>,
 
-    /// The working directory persisted in the pane snapshot this pane was
-    /// restored from. Used for session-memory matching before the live shell
-    /// has bootstrapped and reported its actual cwd.
-    restored_cwd: Option<PathBuf>,
-
     pane_configuration: ModelHandle<PaneConfiguration>,
 
     /// Defining `terminal_manager` before `view` means that `terminal_manager`
@@ -243,7 +238,6 @@ impl TerminalPane {
         Self {
             model_event_sender,
             uuid,
-            restored_cwd: None,
             pane_configuration,
             view,
         }
@@ -263,16 +257,6 @@ impl TerminalPane {
     /// The UUID that identifies this terminal session across app restarts.
     pub(in crate::pane_group) fn session_uuid(&self) -> Vec<u8> {
         self.uuid.clone()
-    }
-
-    /// See [`Self::restored_cwd`].
-    pub(in crate::pane_group) fn set_restored_cwd(&mut self, cwd: Option<PathBuf>) {
-        self.restored_cwd = cwd;
-    }
-
-    /// See [`Self::restored_cwd`].
-    pub(in crate::pane_group) fn restored_cwd(&self) -> Option<PathBuf> {
-        self.restored_cwd.clone()
     }
 
     /// The terminal manager responsible for this session's event loop.
