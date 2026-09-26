@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
+use instant::Instant;
 use serde_json::Value;
 use warp_core::channel::ChannelState;
 use warp_fork_control::paths::default_socket_path;
@@ -26,6 +27,7 @@ const UI_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Job {
     request: Request,
+    deadline: Instant,
     procs: Option<ProcessTable>,
     reply: mpsc::Sender<Result<Value, ErrorBody>>,
 }
@@ -47,6 +49,8 @@ impl ForkControlHost {
                         ErrorCode::Unavailable,
                         "fork control API is disabled",
                     ))
+                } else if Instant::now() >= job.deadline {
+                    Err(timeout_error())
                 } else {
                     match std::panic::catch_unwind(AssertUnwindSafe(|| {
                         handlers::handle(job.request, job.procs, ctx)
@@ -124,24 +128,28 @@ fn start_server(job_tx: async_channel::Sender<Job>) -> Option<Server> {
 fn dispatch(job_tx: &async_channel::Sender<Job>, request: Request) -> Result<Value, ErrorBody> {
     let procs =
         matches!(request, Request::List | Request::FindByPid(_)).then(ProcessTable::snapshot);
+    let deadline = Instant::now() + UI_TIMEOUT;
     let (reply, reply_rx) = mpsc::channel();
     job_tx
         .try_send(Job {
             request,
+            deadline,
             procs,
             reply,
         })
         .map_err(|_| ErrorBody::new(ErrorCode::Unavailable, "Warp is shutting down"))?;
     reply_rx
-        .recv_timeout(UI_TIMEOUT)
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .map_err(|error| match error {
-            RecvTimeoutError::Timeout => {
-                ErrorBody::new(ErrorCode::Timeout, "Warp did not answer in time")
-            }
+            RecvTimeoutError::Timeout => timeout_error(),
             RecvTimeoutError::Disconnected => {
                 ErrorBody::new(ErrorCode::Internal, "Warp dropped the request")
             }
         })?
+}
+
+fn timeout_error() -> ErrorBody {
+    ErrorBody::new(ErrorCode::Timeout, "Warp did not answer in time")
 }
 
 #[cfg(test)]
