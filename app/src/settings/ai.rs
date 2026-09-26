@@ -1913,13 +1913,13 @@ define_settings_group!(AISettings, settings: [
 
     session_memory_auto_restore_interrupted_sessions: SessionMemoryAutoRestoreInterruptedSessions {
         type: bool,
-        default: false,
+        default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.session_memory.auto_restore_interrupted_sessions",
-        description: "Automatically restore interrupted session layouts on startup.",
+        description: "Relaunch Claude Code and Codex sessions that were open when Warp closed; when off, the resume command is inserted into the input.",
     }
 
     session_memory_auto_run_restored_commands: SessionMemoryAutoRunRestoredCommands {

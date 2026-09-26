@@ -2510,6 +2510,11 @@ struct LocalSessionCanonicalPwdCache {
     canonical: CanonicalizedPath,
 }
 
+enum PendingSessionMemoryRestore {
+    Run(String),
+    Insert(String),
+}
+
 pub struct TerminalView {
     pub model: Arc<FairMutex<TerminalModel>>,
     view_handle: WeakViewHandle<Self>,
@@ -2631,7 +2636,7 @@ pub struct TerminalView {
     /// `pane_tree_from_template_recursive` when a tab config has both
     /// commands and `PaneMode::Agent`.
     enter_agent_view_after_pending_commands: bool,
-    pending_session_memory_restore_command: Option<String>,
+    pending_session_memory_restore: Option<PendingSessionMemoryRestore>,
     slow_bootstrap_banner: ViewHandle<Banner<TerminalAction>>,
     is_slow_bootstrap_banner_open: bool,
     /// Timer that auto-dismisses the slow-bootstrap banner after
@@ -4410,7 +4415,7 @@ impl TerminalView {
             awaiting_pending_command_completion: false,
             pending_command_queue: Default::default(),
             enter_agent_view_after_pending_commands: false,
-            pending_session_memory_restore_command: None,
+            pending_session_memory_restore: None,
             slow_bootstrap_banner,
             is_slow_bootstrap_banner_open: false,
             slow_bootstrap_banner_auto_dismiss_handle: None,
@@ -13440,9 +13445,7 @@ impl TerminalView {
             }
             ModelEvent::BootstrapPrecmdDone => {
                 self.execute_pending_command((), ctx);
-                if let Some(command) = self.pending_session_memory_restore_command.take() {
-                    self.execute_command_or_set_pending(&command, ctx);
-                }
+                self.drain_pending_session_memory_restore(ctx);
             }
             ModelEvent::AgentTaggedInChanged {
                 block_id,
@@ -14214,10 +14217,7 @@ impl TerminalView {
         // Layout-restored panes never emit `BootstrapPrecmdDone` (their restored
         // blocks make the bootstrap precmd send `AfterBlockCompleted` instead), so
         // a deferred session-memory restore command must also be drained here.
-        if let Some(command) = self.pending_session_memory_restore_command.take() {
-            log::info!("Session memory restore: executing deferred command after shell bootstrap");
-            self.execute_command_or_set_pending(&command, ctx);
-        }
+        self.drain_pending_session_memory_restore(ctx);
         self.hide_slow_bootstrap_banner(ctx);
 
         if self.should_display_vim_banner(&session, ctx) {
@@ -16677,7 +16677,42 @@ impl TerminalView {
         if self.is_login_shell_bootstrapped {
             self.execute_command_or_set_pending(command, ctx);
         } else {
-            self.pending_session_memory_restore_command = Some(command.to_string());
+            self.pending_session_memory_restore =
+                Some(PendingSessionMemoryRestore::Run(command.to_string()));
+        }
+    }
+
+    pub fn insert_command_when_bootstrapped_or_defer(
+        &mut self,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.is_login_shell_bootstrapped {
+            self.input
+                .update(ctx, |input, ctx| input.replace_buffer_content(command, ctx));
+        } else {
+            self.pending_session_memory_restore =
+                Some(PendingSessionMemoryRestore::Insert(command.to_string()));
+        }
+    }
+
+    fn drain_pending_session_memory_restore(&mut self, ctx: &mut ViewContext<Self>) {
+        match self.pending_session_memory_restore.take() {
+            Some(PendingSessionMemoryRestore::Run(command)) => {
+                log::info!(
+                    "Session memory restore: executing deferred command after shell bootstrap"
+                );
+                self.execute_command_or_set_pending(&command, ctx);
+            }
+            Some(PendingSessionMemoryRestore::Insert(command)) => {
+                log::info!(
+                    "Session memory restore: inserting deferred command after shell bootstrap"
+                );
+                self.input.update(ctx, |input, ctx| {
+                    input.replace_buffer_content(&command, ctx)
+                });
+            }
+            None => {}
         }
     }
 

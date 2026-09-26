@@ -10841,3 +10841,32 @@ fn visible_bootstrap_block_leaves_focus_on_tab_group_rename_editor() {
         }));
     });
 }
+
+#[test]
+fn deferred_session_memory_insert_fills_input_without_running_after_bootstrap() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (_, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let input = terminal.read(&app, |terminal, _ctx| terminal.input().clone());
+
+        terminal.update(&mut app, |view, ctx| {
+            view.is_login_shell_bootstrapped = false;
+            view.insert_command_when_bootstrapped_or_defer("claude --continue", ctx);
+        });
+        assert!(
+            input
+                .read(&app, |input, ctx| input.buffer_text(ctx))
+                .is_empty()
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.is_login_shell_bootstrapped = true;
+            view.drain_pending_session_memory_restore(ctx);
+        });
+        assert_eq!(
+            input.read(&app, |input, ctx| input.buffer_text(ctx)),
+            "claude --continue"
+        );
+        assert!(!input.read(&app, |input, _ctx| input.has_pending_command()));
+    });
+}

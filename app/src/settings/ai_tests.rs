@@ -541,7 +541,7 @@ fn test_session_memory_settings_defaults() {
             );
             assert_eq!(
                 *settings.session_memory_auto_restore_interrupted_sessions,
-                false
+                true
             );
             assert_eq!(*settings.session_memory_auto_run_restored_commands, false);
             assert_eq!(*settings.session_memory_index_claude_code, true);
