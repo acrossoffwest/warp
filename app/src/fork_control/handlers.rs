@@ -166,17 +166,16 @@ fn focus(pane_id: u64, ctx: &mut ModelContext<ForkControlHost>) -> Result<(), Er
 fn find_tab(
     tab_id: u64,
     ctx: &AppContext,
-) -> Result<(ViewHandle<Workspace>, usize, ViewHandle<PaneGroup>), ErrorBody> {
+) -> Result<(ViewHandle<Workspace>, ViewHandle<PaneGroup>), ErrorBody> {
     sorted_workspaces(ctx)
         .into_iter()
         .find_map(|(_, workspace)| {
             let found = workspace
                 .as_ref(ctx)
                 .tab_views()
-                .enumerate()
-                .find(|(_, group)| entity_number(group.id()) == tab_id)
-                .map(|(index, group)| (index, group.clone()));
-            found.map(|(index, group)| (workspace.clone(), index, group))
+                .find(|group| entity_number(group.id()) == tab_id)
+                .cloned();
+            found.map(|group| (workspace.clone(), group))
         })
         .ok_or_else(|| not_found(format!("no tab with tab_id {tab_id}")))
 }
@@ -185,11 +184,11 @@ fn set_title(
     params: SetTitleParams,
     ctx: &mut ModelContext<ForkControlHost>,
 ) -> Result<(), ErrorBody> {
-    let (workspace, tab_index, pane_group) = match (params.tab_id, params.pane_id) {
+    let (workspace, pane_group) = match (params.tab_id, params.pane_id) {
         (Some(tab_id), _) => find_tab(tab_id, ctx)?,
         (None, Some(pane_id)) => {
             let location = find_pane(pane_id, ctx)?;
-            (location.workspace, location.tab_index, location.pane_group)
+            (location.workspace, location.pane_group)
         }
         (None, None) => {
             return Err(ErrorBody::new(
@@ -207,12 +206,9 @@ fn set_title(
         Some(title) => group.set_title(title, ctx),
         None => group.clear_title(ctx),
     });
-    // PaneGroup::set_title refocuses its own focused pane; hand focus back to the active tab.
+    // PaneGroup::set_title focuses the renamed tab's pane; hand focus back to the active tab.
     workspace.update(ctx, |workspace, ctx| {
-        let active = workspace.active_tab_index();
-        if active != tab_index {
-            workspace.activate_tab(active, ctx);
-        }
+        workspace.focus_active_tab(ctx);
         ctx.notify();
     });
     Ok(())
@@ -279,7 +275,7 @@ fn open_tab(
                     "no Warp window is open; use window \"new\"",
                 )
             })?;
-            let previous_tab = workspace.as_ref(ctx).active_tab_index();
+            let previous_tab = workspace.as_ref(ctx).active_tab_pane_group().id();
             let pane_group = workspace.update(ctx, |workspace, ctx| {
                 workspace.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(Box::new(options)),
@@ -289,7 +285,7 @@ fn open_tab(
                 );
                 let pane_group = workspace.active_tab_pane_group().clone();
                 if !params.focus {
-                    workspace.activate_tab(previous_tab, ctx);
+                    workspace.activate_tab_by_pane_group_id(previous_tab, ctx);
                 }
                 pane_group
             });
