@@ -249,6 +249,7 @@ pub struct AgentSessionFile {
 
 pub fn match_session_file(
     started_at: i64,
+    observed_until: i64,
     files: &[AgentSessionFile],
     claimed: &HashSet<String>,
 ) -> Option<String> {
@@ -256,9 +257,10 @@ pub fn match_session_file(
         .iter()
         .filter(|file| {
             file.created_at + SESSION_FILE_START_TOLERANCE_SECONDS >= started_at
+                && file.created_at <= observed_until
                 && !claimed.contains(&file.session_id)
         })
-        .min_by_key(|file| file.created_at)
+        .min_by_key(|file| (file.created_at, &file.session_id))
         .map(|file| file.session_id.clone())
 }
 
@@ -270,14 +272,14 @@ pub fn resolve_missing_session_ids(
     claimed.extend(
         candidates
             .iter()
-            .filter_map(|candidate| candidate.native_session_id.clone()),
+            .filter_map(|candidate| valid_native_session_id(candidate).map(str::to_owned)),
     );
     let mut order = (0..candidates.len()).collect::<Vec<_>>();
     order.sort_by_key(|&index| candidates[index].started_at);
 
     for index in order {
         let candidate = &candidates[index];
-        if candidate.native_session_id.is_some() {
+        if valid_native_session_id(candidate).is_some() {
             continue;
         }
         let (Some(started_at), Some(cwd)) = (candidate.started_at, candidate.cwd.clone()) else {
@@ -285,7 +287,8 @@ pub fn resolve_missing_session_ids(
         };
         let mut files = session_files(candidate.source, &cwd);
         files.retain(|file| is_valid_session_id(&file.session_id));
-        if let Some(session_id) = match_session_file(started_at, &files, &claimed) {
+        let observed_until = candidate.completed_at.unwrap_or(candidate.last_seen_at);
+        if let Some(session_id) = match_session_file(started_at, observed_until, &files, &claimed) {
             claimed.insert(session_id.clone());
             candidates[index].native_session_id = Some(session_id);
         }

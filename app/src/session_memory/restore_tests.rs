@@ -741,7 +741,7 @@ fn match_session_file_picks_earliest_unclaimed_file_after_start() {
     let claimed = HashSet::from(["claimed".to_string()]);
 
     assert_eq!(
-        match_session_file(100, &files, &claimed).as_deref(),
+        match_session_file(100, 1000, &files, &claimed).as_deref(),
         Some("first")
     );
 }
@@ -750,7 +750,7 @@ fn match_session_file_picks_earliest_unclaimed_file_after_start() {
 fn match_session_file_ignores_files_created_before_start() {
     let files = vec![session_file("old", 50)];
 
-    assert_eq!(match_session_file(100, &files, &HashSet::new()), None);
+    assert_eq!(match_session_file(100, 1000, &files, &HashSet::new()), None);
 }
 
 #[test]
@@ -758,7 +758,7 @@ fn match_session_file_accepts_tolerance_before_start() {
     let files = vec![session_file("just-before", 99)];
 
     assert_eq!(
-        match_session_file(100, &files, &HashSet::new()).as_deref(),
+        match_session_file(100, 1000, &files, &HashSet::new()).as_deref(),
         Some("just-before")
     );
 }
@@ -774,6 +774,7 @@ fn resolve_missing_session_ids_does_not_assign_one_file_to_two_panes() {
     );
     first.id = "first".to_string();
     first.started_at = Some(100);
+    first.last_seen_at = 1000;
     let mut second = first.clone();
     second.id = "second".to_string();
     second.started_at = Some(110);
@@ -811,6 +812,7 @@ fn resolve_missing_session_ids_ignores_files_without_uuid_ids() {
         AgentPermissionMode::Normal,
     );
     record.started_at = Some(100);
+    record.last_seen_at = 1000;
     let mut candidates = vec![record];
 
     resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
@@ -821,6 +823,186 @@ fn resolve_missing_session_ids_ignores_files_without_uuid_ids() {
     });
 
     assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_A));
+}
+
+#[test]
+fn match_session_file_ignores_files_created_after_pane_was_observed() {
+    let files = vec![session_file(SESSION_A, 300)];
+
+    assert_eq!(match_session_file(100, 200, &files, &HashSet::new()), None);
+}
+
+#[test]
+fn match_session_file_breaks_same_second_ties_by_session_id() {
+    let files = vec![session_file(SESSION_B, 105), session_file(SESSION_A, 105)];
+
+    assert_eq!(
+        match_session_file(100, 1000, &files, &HashSet::new()).as_deref(),
+        Some(SESSION_A)
+    );
+}
+
+#[test]
+fn resolve_missing_session_ids_uses_completed_at_as_upper_bound() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut record = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    record.started_at = Some(100);
+    record.completed_at = Some(150);
+    record.last_seen_at = 1000;
+    let mut candidates = vec![record];
+
+    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
+        vec![session_file(SESSION_A, 200)]
+    });
+
+    assert_eq!(candidates[0].native_session_id, None);
+}
+
+#[test]
+fn resolve_missing_session_ids_does_not_match_file_created_after_last_seen() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut record = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    record.started_at = Some(100);
+    record.last_seen_at = 200;
+    let mut candidates = vec![record];
+
+    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
+        vec![session_file(SESSION_A, 201)]
+    });
+
+    assert_eq!(candidates[0].native_session_id, None);
+}
+
+#[test]
+fn resolve_missing_session_ids_replaces_non_uuid_stored_id_from_file() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut record = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        Some("not-a-uuid"),
+        AgentPermissionMode::Normal,
+    );
+    record.started_at = Some(100);
+    record.last_seen_at = 1000;
+    let mut candidates = vec![record];
+
+    resolve_missing_session_ids(&mut candidates, HashSet::new(), |_, _| {
+        vec![session_file(SESSION_A, 101)]
+    });
+
+    assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_A));
+}
+
+#[test]
+fn startup_plan_resumes_last_codex_with_dangerous_flag() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let record = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::Codex,
+        None,
+        AgentPermissionMode::Dangerous,
+    );
+
+    let plan = startup_agent_restore_plan(&record).expect("plan should be built");
+
+    assert_eq!(
+        plan.command(),
+        Some("codex resume --last --dangerously-bypass-approvals-and-sandbox")
+    );
+}
+
+#[test]
+fn startup_restore_opens_new_tab_without_pane_uuid_when_layout_restore_is_off() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let record = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+
+    let targets = plan_startup_restore(&[record], &[("window-a", vec![1])], false);
+
+    match &targets[0].1 {
+        StartupRestoreTarget::NewTab { plan } => {
+            assert_eq!(plan.command(), Some("claude --continue"));
+        }
+        other => panic!("expected new tab, got {other:?}"),
+    }
+}
+
+#[test]
+fn startup_restore_record_with_id_does_not_consume_continue_slot() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut with_id = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        Some(SESSION_A),
+        AgentPermissionMode::Normal,
+    );
+    with_id.id = "with-id".to_string();
+    with_id.terminal_pane_uuid = Some(vec![1]);
+    with_id.last_seen_at = 200;
+    let mut idless = with_id.clone();
+    idless.id = "idless".to_string();
+    idless.native_session_id = None;
+    idless.terminal_pane_uuid = Some(vec![2]);
+    idless.last_seen_at = 100;
+    let restored = vec![("window-a", vec![1]), ("window-a", vec![2])];
+
+    let targets = plan_startup_restore(&[with_id, idless], &restored, true);
+
+    assert!(
+        targets
+            .iter()
+            .all(|(_, target)| matches!(target, StartupRestoreTarget::ExistingPane { .. }))
+    );
+}
+
+#[test]
+fn startup_restore_continues_idless_records_with_different_source_or_cwd() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let other_dir = tempfile::tempdir().expect("tempdir should be created");
+    let mut claude = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::ClaudeCode,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    claude.id = "claude".to_string();
+    claude.terminal_pane_uuid = Some(vec![1]);
+    let mut codex = claude.clone();
+    codex.id = "codex".to_string();
+    codex.source = SessionMemorySource::Codex;
+    codex.terminal_pane_uuid = Some(vec![2]);
+    let mut other_folder = claude.clone();
+    other_folder.id = "other-folder".to_string();
+    other_folder.cwd = Some(other_dir.path().to_path_buf());
+    other_folder.terminal_pane_uuid = Some(vec![3]);
+    let restored = vec![
+        ("window-a", vec![1]),
+        ("window-a", vec![2]),
+        ("window-b", vec![3]),
+    ];
+
+    let targets = plan_startup_restore(&[claude, codex, other_folder], &restored, true);
+
+    assert_eq!(targets.len(), 3);
+    assert!(
+        targets
+            .iter()
+            .all(|(_, target)| matches!(target, StartupRestoreTarget::ExistingPane { .. }))
+    );
 }
 
 fn startup_agent(
