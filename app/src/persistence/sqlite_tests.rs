@@ -6,16 +6,18 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::{Local, Utc};
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use diesel::{QueryDsl, RunQueryDsl};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
 use warp_graphql::scalars::time::ServerTimestamp;
 
 use super::{
-    app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
-    decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
-    handle_model_event, mark_session_memory_app_run_clean, read_sqlite_data, save_app_state,
-    save_codebase_index_metadata, setup_database, start_session_memory_app_run, start_writer,
+    app_database_file_path, begin_session_memory_run, database_file_path_for_current_scope,
+    database_file_path_for_scope, decode_path, deduplicate_events, encode_path,
+    get_all_codebase_index_metadata, handle_model_event, mark_session_memory_app_run_clean,
+    read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database,
+    start_session_memory_app_run, start_writer,
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
@@ -1547,4 +1549,39 @@ fn session_memory_app_run_tracks_recoverable_previous_run() {
         third_run.recoverable_run_id.as_deref(),
         Some(second_run.current_run_id.as_str())
     );
+}
+
+#[test]
+fn non_app_launch_does_not_create_session_memory_app_run() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+
+    let run_state = begin_session_memory_run(&mut conn, false);
+
+    assert_eq!(run_state.previous_run_id, None);
+    assert_eq!(session_memory_app_run_count(&mut conn), 0);
+}
+
+#[test]
+fn app_launch_creates_one_session_memory_app_run() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+
+    let first = begin_session_memory_run(&mut conn, true);
+    let second = begin_session_memory_run(&mut conn, true);
+
+    assert_eq!(session_memory_app_run_count(&mut conn), 2);
+    assert_eq!(
+        second.previous_run_id.as_deref(),
+        Some(first.current_run_id.as_str())
+    );
+}
+
+fn session_memory_app_run_count(conn: &mut diesel::sqlite::SqliteConnection) -> i64 {
+    crate::persistence::schema::session_memory_app_runs::dsl::session_memory_app_runs
+        .count()
+        .get_result(conn)
+        .expect("app runs should be counted")
 }

@@ -1618,8 +1618,12 @@ pub(crate) fn initialize_app(
         | LaunchMode::RemoteServerProxy
         | LaunchMode::Test { .. } => persistence::PersistedDataScope::Full,
     };
-    let (sqlite_data, writer_handles) =
-        persistence::initialize(ctx, persistence_scope, persisted_data_scope);
+    let (sqlite_data, writer_handles) = persistence::initialize(
+        ctx,
+        persistence_scope,
+        persisted_data_scope,
+        matches!(launch_mode, LaunchMode::App { .. }),
+    );
     timer.mark_interval_end("SQLITE_INITIALIZED");
 
     let persistence_writer = PersistenceWriter::new(writer_handles);

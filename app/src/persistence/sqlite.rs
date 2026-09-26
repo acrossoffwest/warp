@@ -134,6 +134,7 @@ pub fn initialize(
     ctx: &mut AppContext,
     scope: PersistenceScope,
     data_scope: PersistedDataScope,
+    record_session_memory_app_run: bool,
 ) -> (Option<Box<PersistedData>>, Option<WriterHandles>) {
     unsafe {
         // Set up logging before any SQLite calls.
@@ -142,15 +143,10 @@ pub fn initialize(
     let database_path = database_file_path_for_scope(&scope);
     match init_db(&scope) {
         Ok(mut conn) => {
-            let session_memory_run_state = match start_session_memory_app_run(&mut conn) {
-                Ok(run_state) => run_state,
-                Err(err) => {
-                    report_error!(err.context("Failed to start session memory app run"));
-                    SessionMemoryRunState::test_default()
-                }
-            };
-
-            let session_memory_current_run_id = session_memory_run_state.current_run_id.clone();
+            let session_memory_run_state =
+                begin_session_memory_run(&mut conn, record_session_memory_app_run);
+            let session_memory_run_id = record_session_memory_app_run
+                .then(|| session_memory_run_state.current_run_id.clone());
             let mut persisted_data = read_persisted_data(&mut conn, ctx, data_scope);
             if let Some(persisted_data) = persisted_data.as_mut() {
                 persisted_data.session_memory_run_state = session_memory_run_state;
@@ -159,7 +155,7 @@ pub fn initialize(
             let writer_handles = match start_writer(
                 conn,
                 database_path.clone(),
-                Some(session_memory_current_run_id),
+                session_memory_run_id,
             ) {
                 Ok(writer_handles) => Some(writer_handles),
                 Err(err) => {
@@ -968,6 +964,22 @@ fn agent_permission_mode_from_db(permission_mode: &str) -> AgentPermissionMode {
         "dangerous" => AgentPermissionMode::Dangerous,
         "unknown" => AgentPermissionMode::Unknown,
         _ => AgentPermissionMode::Unknown,
+    }
+}
+
+fn begin_session_memory_run(
+    conn: &mut SqliteConnection,
+    record_app_run: bool,
+) -> SessionMemoryRunState {
+    if !record_app_run {
+        return SessionMemoryRunState::test_default();
+    }
+    match start_session_memory_app_run(conn) {
+        Ok(run_state) => run_state,
+        Err(err) => {
+            report_error!(err.context("Failed to start session memory app run"));
+            SessionMemoryRunState::test_default()
+        }
     }
 }
 
