@@ -235,6 +235,9 @@ impl SessionMemoryRecord {
             return;
         }
         self.completed_at = Some(completed_at);
+        if self.started_at.is_none() {
+            self.started_at = existing_started_at;
+        }
         if self.is_agent() {
             self.status = SessionMemoryStatus::Success;
         }

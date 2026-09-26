@@ -1387,6 +1387,93 @@ fn session_memory_agent_end_ignores_other_block_start() {
     assert_eq!(stored.status, SessionMemoryStatus::Live);
 }
 
+#[test]
+fn session_memory_agent_end_survives_terminal_snapshot_between_agent_snapshots() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let record = session_memory_agent_record(Some(100));
+
+    upsert_session_memory(&mut conn, record.clone());
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id.clone(),
+            started_at: 100,
+            completed_at: 150,
+        },
+        &mut conn,
+    )
+    .expect("agent end should be written");
+
+    let mut terminal_snapshot = record.clone();
+    terminal_snapshot.source = SessionMemorySource::WarpTerminal;
+    terminal_snapshot.kind = SessionMemoryKind::Terminal;
+    terminal_snapshot.started_at = None;
+    terminal_snapshot.completed_at = None;
+    upsert_session_memory(&mut conn, terminal_snapshot);
+
+    upsert_session_memory(&mut conn, record);
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.completed_at, Some(150));
+    assert_eq!(stored.status, SessionMemoryStatus::Success);
+}
+
+#[test]
+fn session_memory_agent_end_event_ignores_warp_terminal_source() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let mut record = session_memory_agent_record(Some(100));
+    record.source = SessionMemorySource::WarpTerminal;
+    record.kind = SessionMemoryKind::Terminal;
+
+    upsert_session_memory(&mut conn, record.clone());
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id,
+            started_at: 100,
+            completed_at: 150,
+        },
+        &mut conn,
+    )
+    .expect("agent end event should be handled");
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.completed_at, None);
+}
+
+#[test]
+fn session_memory_agent_end_event_does_not_overwrite_existing_completed_at() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let record = session_memory_agent_record(Some(100));
+
+    upsert_session_memory(&mut conn, record.clone());
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id.clone(),
+            started_at: 100,
+            completed_at: 150,
+        },
+        &mut conn,
+    )
+    .expect("first agent end should be written");
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id,
+            started_at: 100,
+            completed_at: 999,
+        },
+        &mut conn,
+    )
+    .expect("second agent end event should be handled");
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.completed_at, Some(150));
+}
+
 fn session_memory_agent_record(started_at: Option<i64>) -> SessionMemoryRecord {
     SessionMemoryRecord {
         id: "warp_terminal:AQIDBA==".to_string(),
