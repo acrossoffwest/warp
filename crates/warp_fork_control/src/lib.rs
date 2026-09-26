@@ -5,3 +5,5 @@ pub mod input;
 pub mod paths;
 pub mod pids;
 pub mod protocol;
+#[cfg(unix)]
+pub mod server;
