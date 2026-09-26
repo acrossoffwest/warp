@@ -199,7 +199,7 @@ fn is_safe_tmux_restore_command(command: &str) -> bool {
     }
 }
 
-fn is_env_assignment(token: &str) -> bool {
+pub(super) fn is_env_assignment(token: &str) -> bool {
     token.split_once('=').map(|(name, _)| {
         !name.is_empty()
             && name
