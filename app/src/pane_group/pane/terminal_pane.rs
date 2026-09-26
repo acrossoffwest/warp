@@ -142,7 +142,7 @@ fn session_memory_record_for_pane(
     let (running_command, running_command_started_at) = {
         let model = view.model.lock();
         let active_block = model.block_list().active_block();
-        if active_block.is_active_and_long_running() {
+        if active_block.is_executing() || active_block.is_active_and_long_running() {
             (
                 Some(active_block.command_to_string()),
                 block_timestamp_seconds(active_block.start_ts()),
@@ -348,11 +348,20 @@ impl TerminalPane {
         };
         let completed_at =
             block_timestamp_seconds(block.completed_ts.as_ref()).unwrap_or_else(now_unix_seconds);
+        let command = self
+            .terminal_view(ctx)
+            .as_ref(ctx)
+            .model
+            .lock()
+            .block_list()
+            .block_with_id(&block.id)
+            .and_then(|block| session_memory_user_command(Some(&block.command_to_string())));
 
         let model_event = ModelEvent::MarkSessionMemoryAgentEnded {
             id: self.session_memory_record_id(),
             started_at,
             completed_at,
+            command,
         };
         if let Err(err) = sender.send(model_event) {
             log::error!("Error sending session memory agent end event: {err:?}");
@@ -1154,6 +1163,13 @@ fn handle_terminal_view_event(
             }
             Event::AppStateChanged => {
                 ctx.emit(pane_group::Event::AppStateChanged);
+            }
+            Event::BlockStarted {
+                is_for_in_band_command: false,
+            } => {
+                if let Some(pane) = group.terminal_session_by_id(pane_id) {
+                    pane.upsert_session_memory_record(ctx);
+                }
             }
             Event::BlockCompleted { block, is_local } => {
                 match group.terminal_session_by_id(pane_id) {

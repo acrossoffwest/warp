@@ -1331,6 +1331,7 @@ fn session_memory_agent_end_survives_later_snapshot_upsert() {
             id: record.id.clone(),
             started_at: 100,
             completed_at: 150,
+            command: None,
         },
         &mut conn,
     )
@@ -1355,6 +1356,7 @@ fn session_memory_new_agent_start_clears_previous_end() {
             id: record.id.clone(),
             started_at: 100,
             completed_at: 150,
+            command: None,
         },
         &mut conn,
     )
@@ -1379,6 +1381,7 @@ fn session_memory_agent_end_ignores_other_block_start() {
             id: record.id,
             started_at: 99,
             completed_at: 150,
+            command: None,
         },
         &mut conn,
     )
@@ -1402,6 +1405,7 @@ fn session_memory_agent_end_survives_terminal_snapshot_between_agent_snapshots()
             id: record.id.clone(),
             started_at: 100,
             completed_at: 150,
+            command: None,
         },
         &mut conn,
     )
@@ -1436,6 +1440,7 @@ fn session_memory_agent_end_event_ignores_warp_terminal_source() {
             id: record.id,
             started_at: 100,
             completed_at: 150,
+            command: None,
         },
         &mut conn,
     )
@@ -1458,6 +1463,7 @@ fn session_memory_agent_end_event_does_not_overwrite_existing_completed_at() {
             id: record.id.clone(),
             started_at: 100,
             completed_at: 150,
+            command: None,
         },
         &mut conn,
     )
@@ -1467,6 +1473,7 @@ fn session_memory_agent_end_event_does_not_overwrite_existing_completed_at() {
             id: record.id,
             started_at: 100,
             completed_at: 999,
+            command: None,
         },
         &mut conn,
     )
@@ -1474,6 +1481,95 @@ fn session_memory_agent_end_event_does_not_overwrite_existing_completed_at() {
 
     let stored = read_single_session_memory_record(&mut conn);
     assert_eq!(stored.completed_at, Some(150));
+}
+
+#[test]
+fn session_memory_terminal_snapshot_after_agent_end_keeps_agent_card() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let record = session_memory_agent_record(Some(100));
+    upsert_session_memory(&mut conn, record.clone());
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id.clone(),
+            started_at: 100,
+            completed_at: 150,
+            command: None,
+        },
+        &mut conn,
+    )
+    .expect("agent end should be written");
+
+    let mut terminal_snapshot = record.clone();
+    terminal_snapshot.source = SessionMemorySource::WarpTerminal;
+    terminal_snapshot.kind = SessionMemoryKind::Terminal;
+    terminal_snapshot.title = "/tmp/warp-session-memory-test".to_string();
+    terminal_snapshot.native_session_id = None;
+    terminal_snapshot.permission_mode = AgentPermissionMode::Unknown;
+    terminal_snapshot.started_at = None;
+    upsert_session_memory(&mut conn, terminal_snapshot);
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.source, SessionMemorySource::ClaudeCode);
+    assert_eq!(stored.kind, SessionMemoryKind::AgentChat);
+    assert_eq!(stored.status, SessionMemoryStatus::Success);
+    assert_eq!(stored.title, "claude");
+    assert_eq!(stored.native_session_id.as_deref(), Some("abc"));
+    assert_eq!(stored.permission_mode, AgentPermissionMode::Normal);
+    assert_eq!(stored.started_at, Some(100));
+    assert_eq!(stored.completed_at, Some(150));
+}
+
+#[test]
+fn session_memory_agent_end_applies_to_unknown_start_of_same_command() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+        .expect("database should initialize");
+    let record = session_memory_agent_record(None);
+    upsert_session_memory(&mut conn, record.clone());
+
+    handle_model_event(
+        ModelEvent::MarkSessionMemoryAgentEnded {
+            id: record.id,
+            started_at: 100,
+            completed_at: 150,
+            command: record.last_command,
+        },
+        &mut conn,
+    )
+    .expect("agent end event should be handled");
+
+    let stored = read_single_session_memory_record(&mut conn);
+    assert_eq!(stored.started_at, Some(100));
+    assert_eq!(stored.completed_at, Some(150));
+    assert_eq!(stored.status, SessionMemoryStatus::Success);
+}
+
+#[test]
+fn session_memory_agent_end_ignores_unknown_start_of_other_command() {
+    for command in [Some("ls".to_string()), None] {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let mut conn = setup_database(&tempdir.path().join("warp.sqlite"))
+            .expect("database should initialize");
+        let record = session_memory_agent_record(None);
+        upsert_session_memory(&mut conn, record.clone());
+
+        handle_model_event(
+            ModelEvent::MarkSessionMemoryAgentEnded {
+                id: record.id,
+                started_at: 100,
+                completed_at: 150,
+                command,
+            },
+            &mut conn,
+        )
+        .expect("agent end event should be handled");
+
+        let stored = read_single_session_memory_record(&mut conn);
+        assert_eq!(stored.started_at, None);
+        assert_eq!(stored.completed_at, None);
+    }
 }
 
 fn session_memory_agent_record(started_at: Option<i64>) -> SessionMemoryRecord {

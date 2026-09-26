@@ -223,12 +223,8 @@ impl SessionMemoryRecord {
         )
     }
 
-    pub fn keep_agent_end(
-        &mut self,
-        existing_started_at: Option<i64>,
-        existing_completed_at: Option<i64>,
-    ) {
-        let Some(completed_at) = existing_completed_at else {
+    pub fn keep_agent_end(&mut self, existing: &SessionMemoryRecord) {
+        let Some(completed_at) = existing.completed_at else {
             return;
         };
         if self.completed_at.is_some() {
@@ -236,13 +232,22 @@ impl SessionMemoryRecord {
         }
         let new_agent_started = self.is_agent()
             && self.started_at.is_some()
-            && self.started_at != existing_started_at;
+            && self.started_at != existing.started_at;
         if new_agent_started {
             return;
         }
         self.completed_at = Some(completed_at);
         if self.started_at.is_none() {
-            self.started_at = existing_started_at;
+            self.started_at = existing.started_at;
+        }
+        if !self.is_agent() && existing.is_agent() {
+            self.source = existing.source;
+            self.kind = existing.kind;
+            self.native_session_id = existing.native_session_id.clone();
+            self.title = existing.title.clone();
+            self.transcript_path = existing.transcript_path.clone();
+            self.launch_argv = existing.launch_argv.clone();
+            self.permission_mode = existing.permission_mode;
         }
         if self.is_agent() {
             self.status = SessionMemoryStatus::Success;

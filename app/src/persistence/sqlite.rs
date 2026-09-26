@@ -884,8 +884,15 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             id,
             started_at,
             completed_at,
-        } => mark_session_memory_agent_ended(connection, &id, started_at, completed_at)
-            .context("error marking session memory agent ended"),
+            command,
+        } => mark_session_memory_agent_ended(
+            connection,
+            &id,
+            started_at,
+            completed_at,
+            command.as_deref(),
+        )
+        .context("error marking session memory agent ended"),
         ModelEvent::MarkSessionMemoryRecordsOffered {
             ids,
             app_run_id,
@@ -1124,14 +1131,11 @@ fn upsert_session_memory_record(
 ) -> Result<()> {
     let existing = schema::session_memory_records::dsl::session_memory_records
         .filter(schema::session_memory_records::dsl::id.eq(&record.id))
-        .select((
-            schema::session_memory_records::dsl::started_at,
-            schema::session_memory_records::dsl::completed_at,
-        ))
-        .first::<(Option<i64>, Option<i64>)>(conn)
-        .optional()?;
-    if let Some((existing_started_at, existing_completed_at)) = existing {
-        record.keep_agent_end(existing_started_at, existing_completed_at);
+        .first::<model::SessionMemoryRecord>(conn)
+        .optional()?
+        .and_then(session_memory_record_from_db);
+    if let Some(existing) = existing {
+        record.keep_agent_end(&existing);
     }
 
     let row = session_memory_record_to_db(record)?;
@@ -1167,23 +1171,32 @@ fn mark_session_memory_agent_ended(
     record_id: &str,
     started_at: i64,
     completed_at: i64,
+    command: Option<&str>,
 ) -> Result<()> {
-    diesel::update(
-        schema::session_memory_records::dsl::session_memory_records
-            .filter(schema::session_memory_records::dsl::id.eq(record_id))
-            .filter(schema::session_memory_records::dsl::started_at.eq(started_at))
-            .filter(schema::session_memory_records::dsl::completed_at.is_null())
-            .filter(
-                schema::session_memory_records::dsl::source
-                    .ne(session_memory_source_to_db(SessionMemorySource::WarpTerminal)),
-            ),
-    )
-    .set((
-        schema::session_memory_records::dsl::completed_at.eq(completed_at),
-        schema::session_memory_records::dsl::status
-            .eq(session_memory_status_to_db(SessionMemoryStatus::Success)),
-    ))
-    .execute(conn)?;
+    use schema::session_memory_records::dsl;
+    let ended = (
+        dsl::started_at.eq(started_at),
+        dsl::completed_at.eq(completed_at),
+        dsl::status.eq(session_memory_status_to_db(SessionMemoryStatus::Success)),
+    );
+    let running_agent = dsl::session_memory_records
+        .filter(dsl::id.eq(record_id))
+        .filter(dsl::completed_at.is_null())
+        .filter(dsl::source.ne(session_memory_source_to_db(SessionMemorySource::WarpTerminal)));
+    let updated = diesel::update(running_agent.filter(dsl::started_at.eq(started_at)))
+        .set(ended.clone())
+        .execute(conn)?;
+    if updated == 0
+        && let Some(command) = command
+    {
+        diesel::update(
+            running_agent
+                .filter(dsl::started_at.is_null())
+                .filter(dsl::last_command.eq(command)),
+        )
+        .set(ended)
+        .execute(conn)?;
+    }
     Ok(())
 }
 

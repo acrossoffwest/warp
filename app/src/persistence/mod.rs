@@ -521,6 +521,7 @@ pub enum ModelEvent {
         id: String,
         started_at: i64,
         completed_at: i64,
+        command: Option<String>,
     },
     MarkSessionMemoryRecordsOffered {
         ids: Vec<String>,
