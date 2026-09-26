@@ -10930,29 +10930,30 @@ impl Workspace {
                     }
                 })
                 .map(|ws| {
-                    let path_str = truncate_path_from_start(&abbreviate_home_path(&ws.path), 48);
+                    let path_str = ws.path.to_string_lossy().into_owned();
+                    let display = user_friendly_path(&path_str, home.as_deref()).into_owned();
                     let fields = if let Some(agent) = cli_agent {
                         let action = NewSessionSidecarSelection::LaunchCLIAgentInDirectory {
                             agent,
                             directory: ws.path.clone(),
                         };
                         if agent.supports_resume() {
-                            MenuItemFields::new_submenu(path_str.clone())
-                                .with_icon(icons::Icon::Folder)
-                                .with_on_select_action(action)
+                            MenuItemFields::new_submenu(display).with_on_select_action(action)
                         } else {
-                            MenuItemFields::new(path_str.clone())
-                                .with_icon(icons::Icon::Folder)
-                                .with_on_select_action(action)
+                            MenuItemFields::new(display).with_on_select_action(action)
                         }
                     } else {
-                        MenuItemFields::new(path_str.clone())
-                            .with_icon(icons::Icon::Folder)
-                            .with_on_select_action(NewSessionSidecarSelection::OpenWorktreeRepo {
-                                repo_path: path_str,
-                            })
+                        MenuItemFields::new(display).with_on_select_action(
+                            NewSessionSidecarSelection::OpenWorktreeRepo {
+                                repo_path: path_str.clone(),
+                            },
+                        )
                     };
-                    fields.into_item()
+                    fields
+                        .with_icon(icons::Icon::Folder)
+                        .with_clip_config(ClipConfig::start())
+                        .with_tooltip(path_str)
+                        .into_item()
                 })
                 .collect::<Vec<_>>(),
         );
