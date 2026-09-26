@@ -487,7 +487,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn warp_dir() -> PathBuf {
-        PathBuf::from("/Users/[redacted]/projects/own-projects/warp")
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("app crate should live inside the repo")
+            .to_path_buf()
     }
 
     #[test]
