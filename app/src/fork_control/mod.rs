@@ -5,6 +5,7 @@ mod handlers;
 mod procinfo;
 
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::sync::mpsc::RecvTimeoutError;
@@ -126,6 +127,9 @@ fn start_server(job_tx: async_channel::Sender<Job>) -> Option<Server> {
 }
 
 fn dispatch(job_tx: &async_channel::Sender<Job>, request: Request) -> Result<Value, ErrorBody> {
+    if let Request::OpenTab(params) = &request {
+        validate_cwd(&params.cwd)?;
+    }
     let procs =
         matches!(request, Request::List | Request::FindByPid(_)).then(ProcessTable::snapshot);
     let deadline = Instant::now() + UI_TIMEOUT;
@@ -150,6 +154,18 @@ fn dispatch(job_tx: &async_channel::Sender<Job>, request: Request) -> Result<Val
 
 fn timeout_error() -> ErrorBody {
     ErrorBody::new(ErrorCode::Timeout, "Warp did not answer in time")
+}
+
+fn validate_cwd(cwd: &str) -> Result<(), ErrorBody> {
+    let path = Path::new(cwd);
+    if path.is_absolute() && path.is_dir() {
+        Ok(())
+    } else {
+        Err(ErrorBody::new(
+            ErrorCode::BadRequest,
+            format!("cwd must be an existing absolute directory: {cwd}"),
+        ))
+    }
 }
 
 #[cfg(test)]

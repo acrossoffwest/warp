@@ -230,12 +230,6 @@ fn open_tab(
     ctx: &mut ModelContext<ForkControlHost>,
 ) -> Result<OpenTabResult, ErrorBody> {
     let cwd = PathBuf::from(&params.cwd);
-    if !cwd.is_absolute() || !cwd.is_dir() {
-        return Err(ErrorBody::new(
-            ErrorCode::BadRequest,
-            format!("cwd must be an existing absolute directory: {}", params.cwd),
-        ));
-    }
     let title = params
         .title
         .as_deref()
