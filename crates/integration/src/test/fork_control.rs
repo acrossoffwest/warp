@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::tab::assert_tab_title;
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
+use warp::integration_testing::workspace::assert_focused_tab_index;
 use warpui_core::async_assert;
 use warpui_core::integration::TestStep;
 
@@ -48,13 +49,13 @@ pub fn test_fork_control_api() -> Builder {
                             "open_tab",
                             json!({"cwd": cwd, "title": "FC-TEST", "command": "echo fork-control"}),
                         )?;
+                        let focused = call("focus", json!({"pane_id": first_pane}))?;
                         let renamed = call(
                             "set_title",
                             json!({"pane_id": open["result"]["pane_id"], "title": "FC-TEST"}),
                         )?;
                         let at_prompt =
                             call("send_input", json!({"pane_id": first_pane, "text": "x"}))?;
-                        let focused = call("focus", json!({"pane_id": first_pane}))?;
                         let missing = call("focus", json!({"pane_id": 999_999_999u64}))?;
                         Ok(vec![ping, list, open, renamed, at_prompt, focused, missing])
                     })();
@@ -101,5 +102,11 @@ pub fn test_fork_control_api() -> Builder {
         .with_step(
             new_step_with_default_assertions("fork_control: new tab has the custom title")
                 .add_assertion(assert_tab_title(1, "FC-TEST")),
+        )
+        .with_step(
+            new_step_with_default_assertions(
+                "fork_control: renaming a background tab keeps tab 0 active",
+            )
+            .add_assertion(assert_focused_tab_index(0)),
         )
 }
