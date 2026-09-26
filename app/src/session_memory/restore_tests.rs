@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use super::restore::{
     AgentFolder, AgentSessionFile, RestoreError, RunBounds, StartupRestoreSkip,
-    StartupRestoreTarget, agent_restore_plan, match_session_file, plan_startup_restore,
-    resolve_missing_session_ids, restore_plan_for_record, session_file_mtime_floor,
-    startup_agent_restore_plan, terminal_restore_plan,
+    StartupRestoreTarget, agent_restore_plan, match_ended_session_file, match_session_file,
+    plan_startup_restore, resolve_missing_session_ids, restore_plan_for_record,
+    session_file_mtime_floor, startup_agent_restore_plan, terminal_restore_plan,
 };
 use super::types::{
     AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
@@ -720,6 +720,69 @@ fn resolve_missing_session_ids_lets_exited_pane_claim_its_file_first() {
     });
 
     assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_B));
+}
+
+#[test]
+fn ended_record_takes_the_file_last_written_at_its_end() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut live = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::Codex,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    live.id = "live".to_string();
+    live.started_at = Some(100);
+    let mut exited = live.clone();
+    exited.id = "exited".to_string();
+    exited.completed_at = Some(200);
+    let mut candidates = vec![live];
+
+    resolve(&mut candidates, &[exited], |_, _| {
+        vec![
+            session_file_modified(SESSION_A, 101, 900),
+            session_file_modified(SESSION_B, 101, 200),
+        ]
+    });
+
+    assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_A));
+}
+
+#[test]
+fn ended_record_without_file_written_before_its_end_takes_nothing() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut live = startup_agent(
+        tempdir.path().to_path_buf(),
+        SessionMemorySource::Codex,
+        None,
+        AgentPermissionMode::Normal,
+    );
+    live.id = "live".to_string();
+    live.started_at = Some(100);
+    let mut exited = live.clone();
+    exited.id = "exited".to_string();
+    exited.completed_at = Some(200);
+    let mut candidates = vec![live];
+
+    resolve(&mut candidates, &[exited], |_, _| {
+        vec![session_file_modified(SESSION_A, 101, 900)]
+    });
+
+    assert_eq!(candidates[0].native_session_id.as_deref(), Some(SESSION_A));
+}
+
+#[test]
+fn match_ended_session_file_prefers_last_write_closest_to_end() {
+    let files = vec![
+        session_file_modified(SESSION_A, 101, 150),
+        session_file_modified(SESSION_B, 105, 201),
+        session_file_modified(SESSION_TAKEN, 101, 203),
+    ];
+
+    assert_eq!(
+        match_ended_session_file(100, 200, &files, &HashSet::new()).as_deref(),
+        Some(SESSION_B)
+    );
 }
 
 #[test]

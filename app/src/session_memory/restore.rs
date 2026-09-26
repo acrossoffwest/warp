@@ -183,6 +183,30 @@ pub struct RunBounds {
 
 pub type AgentFolder = (SessionMemorySource, PathBuf);
 
+pub fn match_ended_session_file(
+    started_at: i64,
+    completed_at: i64,
+    files: &[AgentSessionFile],
+    claimed: &HashSet<String>,
+) -> Option<String> {
+    files
+        .iter()
+        .filter(|file| {
+            file.created_at + SESSION_FILE_START_TOLERANCE_SECONDS >= started_at
+                && file.created_at <= completed_at
+                && file.modified_at <= completed_at + SESSION_FILE_START_TOLERANCE_SECONDS
+                && !claimed.contains(&file.session_id)
+        })
+        .min_by_key(|file| {
+            (
+                (completed_at - file.modified_at).abs(),
+                file.created_at,
+                &file.session_id,
+            )
+        })
+        .map(|file| file.session_id.clone())
+}
+
 pub fn match_session_file(
     started_at: i64,
     observed_until: i64,
@@ -253,17 +277,34 @@ pub fn resolve_missing_session_ids(
                 .completed_at
                 .or(record.closed_intentionally_at)
                 .unwrap_or(bounds.current_run_started_at);
-            Some((index, record.source, cwd, started_at, observed_until))
+            let completed_at = record.completed_at;
+            Some((
+                index,
+                record.source,
+                cwd,
+                started_at,
+                observed_until,
+                completed_at,
+            ))
         })
         .collect::<Vec<_>>();
-    claimants.sort_by_key(|(_, _, _, started_at, observed_until)| {
-        (observed_until - started_at, *started_at)
+    claimants.sort_by_key(|(_, _, _, started_at, observed_until, completed_at)| {
+        (
+            completed_at.is_none(),
+            observed_until - started_at,
+            *started_at,
+        )
     });
 
-    for (index, source, cwd, started_at, observed_until) in claimants {
+    for (index, source, cwd, started_at, observed_until, completed_at) in claimants {
         let files = files_for(source, &cwd);
-        let Some(session_id) = match_session_file(started_at, observed_until, &files, &claimed)
-        else {
+        let matched = match completed_at {
+            Some(completed_at) => {
+                match_ended_session_file(started_at, completed_at, &files, &claimed)
+            }
+            None => match_session_file(started_at, observed_until, &files, &claimed),
+        };
+        let Some(session_id) = matched else {
             continue;
         };
         claimed.insert(session_id.clone());
