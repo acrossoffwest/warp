@@ -66,3 +66,10 @@ fn encode_empty_text_is_empty() {
     assert!(encode_pty_text("", InputMode::Keys, true).is_empty());
     assert!(encode_pty_text("", InputMode::Paste, false).is_empty());
 }
+
+#[test]
+fn submit_waits_longer_after_a_bracketed_paste() {
+    assert_eq!(submit_delay(true), PASTE_SUBMIT_DELAY);
+    assert_eq!(submit_delay(false), KEYS_SUBMIT_DELAY);
+    assert!(KEYS_SUBMIT_DELAY < PASTE_SUBMIT_DELAY);
+}

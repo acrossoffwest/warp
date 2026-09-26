@@ -21,9 +21,21 @@ pub enum PaneActivity {
 const BRACKETED_PASTE_START: &str = "\x1b[200~";
 const BRACKETED_PASTE_END: &str = "\x1b[201~";
 
-/// Same delay upstream uses before the Enter that submits a bracketed paste to a
-/// CLI agent; an Enter arriving together with the paste end marker is dropped.
+/// Delay before the Enter that follows a bracketed paste, as upstream uses for
+/// Copilot; an Enter arriving right after the paste end marker can be swallowed.
 pub const PASTE_SUBMIT_DELAY: Duration = Duration::from_millis(300);
+
+/// Delay before the Enter that follows unwrapped text; agents such as Claude
+/// ignore a `\r` that arrives in the same read as the text.
+pub const KEYS_SUBMIT_DELAY: Duration = Duration::from_millis(50);
+
+pub fn submit_delay(bracketed_paste_written: bool) -> Duration {
+    if bracketed_paste_written {
+        PASTE_SUBMIT_DELAY
+    } else {
+        KEYS_SUBMIT_DELAY
+    }
+}
 
 pub fn route_input(
     activity: PaneActivity,

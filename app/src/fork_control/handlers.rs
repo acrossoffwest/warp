@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use warp_core::channel::ChannelState;
 use warp_fork_control::input::{
-    InputRoute, PASTE_SUBMIT_DELAY, PaneActivity, encode_pty_text, route_input,
+    InputRoute, PaneActivity, encode_pty_text, route_input, submit_delay,
 };
 use warp_fork_control::pids::find_pane_for_pid;
 use warp_fork_control::protocol::{
@@ -22,6 +22,8 @@ use crate::pane_group::{NewTerminalOptions, PaneGroup, PaneId, PanesLayout};
 use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
 use crate::session_management::CommandContext;
 use crate::terminal::TerminalView;
+#[cfg(feature = "local_tty")]
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::workspace::{Workspace, WorkspaceRegistry};
 
 pub(super) struct PaneLocation {
@@ -344,35 +346,11 @@ fn send_input(
 
     match route {
         InputRoute::Pty => {
-            let bytes = encode_pty_text(&params.text, params.mode, bracketed);
-            let submit_delay = (params.mode == InputMode::Paste && bracketed && !bytes.is_empty())
-                .then_some(PASTE_SUBMIT_DELAY);
-            let submit = params.submit;
-            let delivered = location.terminal.update(ctx, |terminal, ctx| {
-                if !bytes.is_empty() && !terminal.write_user_bytes_to_pty(bytes, ctx) {
-                    return false;
-                }
-                if submit {
-                    match submit_delay {
-                        Some(delay) => {
-                            ctx.spawn(Timer::after(delay), |terminal, _, ctx| {
-                                terminal.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
-                            });
-                        }
-                        None => {
-                            if !terminal.write_user_bytes_to_pty(b"\r".to_vec(), ctx) {
-                                return false;
-                            }
-                        }
-                    }
-                }
-                true
-            });
-            if !delivered {
-                return Err(ErrorBody::new(
-                    ErrorCode::PaneBusy,
-                    "a Warp agent controls this pane's input",
-                ));
+            let to_agent = params.submit
+                && !params.text.is_empty()
+                && submit_to_cli_agent(&location, &params.text, ctx)?;
+            if !to_agent {
+                write_to_pty(&location, &params, bracketed, ctx)?;
             }
         }
         InputRoute::InputEditor => {
@@ -390,6 +368,79 @@ fn send_input(
     Ok(SendInputResult {
         delivered_to: route,
     })
+}
+
+fn pane_busy() -> ErrorBody {
+    ErrorBody::new(
+        ErrorCode::PaneBusy,
+        "a Warp agent controls this pane's input",
+    )
+}
+
+/// Returns false when the pane has no CLI agent session Warp recognizes.
+#[cfg(feature = "local_tty")]
+fn submit_to_cli_agent(
+    location: &PaneLocation,
+    text: &str,
+    ctx: &mut ModelContext<ForkControlHost>,
+) -> Result<bool, ErrorBody> {
+    if CLIAgentSessionsModel::as_ref(ctx)
+        .session(location.terminal.id())
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let agent_in_control = location
+        .terminal
+        .as_ref(ctx)
+        .model
+        .lock()
+        .block_list()
+        .active_block()
+        .is_agent_in_control();
+    if agent_in_control {
+        return Err(pane_busy());
+    }
+    let text = text.to_owned();
+    location.terminal.update(ctx, |terminal, ctx| {
+        terminal.submit_text_to_cli_agent_pty(text, ctx)
+    });
+    Ok(true)
+}
+
+#[cfg(not(feature = "local_tty"))]
+fn submit_to_cli_agent(
+    _location: &PaneLocation,
+    _text: &str,
+    _ctx: &mut ModelContext<ForkControlHost>,
+) -> Result<bool, ErrorBody> {
+    Ok(false)
+}
+
+fn write_to_pty(
+    location: &PaneLocation,
+    params: &SendInputParams,
+    bracketed: bool,
+    ctx: &mut ModelContext<ForkControlHost>,
+) -> Result<(), ErrorBody> {
+    let bytes = encode_pty_text(&params.text, params.mode, bracketed);
+    let delay = submit_delay(params.mode == InputMode::Paste && bracketed && !bytes.is_empty());
+    let submit = params.submit;
+    let delivered = location.terminal.update(ctx, |terminal, ctx| {
+        if bytes.is_empty() {
+            return !submit || terminal.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
+        }
+        if !terminal.write_user_bytes_to_pty(bytes, ctx) {
+            return false;
+        }
+        if submit {
+            ctx.spawn(Timer::after(delay), |terminal, _, ctx| {
+                terminal.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
+            });
+        }
+        true
+    });
+    if delivered { Ok(()) } else { Err(pane_busy()) }
 }
 
 pub(super) fn handle(
