@@ -1,0 +1,21 @@
+[package]
+name = "warp_fork_control"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "warp-fork-ctl"
+path = "src/bin/warp_fork_ctl.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+dirs.workspace = true
+libc.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
