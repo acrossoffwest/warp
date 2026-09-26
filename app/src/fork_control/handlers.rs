@@ -1,18 +1,158 @@
 use serde_json::Value;
 use warp_core::channel::ChannelState;
-use warp_fork_control::protocol::{API_VERSION, ErrorBody, ErrorCode, PingResult, Request};
-use warpui::ModelContext;
+use warp_fork_control::pids::find_pane_for_pid;
+use warp_fork_control::protocol::{
+    API_VERSION, ErrorBody, ErrorCode, ListResult, PaneInfo, PingResult, Request,
+};
+use warpui::{AppContext, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
 use super::ForkControlHost;
 use super::procinfo::ProcessTable;
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::session_management::CommandContext;
+use crate::terminal::TerminalView;
+use crate::workspace::{Workspace, WorkspaceRegistry};
+
+pub(super) struct PaneLocation {
+    pub(super) window_id: WindowId,
+    pub(super) workspace: ViewHandle<Workspace>,
+    pub(super) tab_index: usize,
+    pub(super) pane_group: ViewHandle<PaneGroup>,
+    pub(super) pane_id: PaneId,
+    pub(super) terminal: ViewHandle<TerminalView>,
+}
+
+pub(super) fn entity_number(id: EntityId) -> u64 {
+    id.to_string().parse().unwrap_or_default()
+}
+
+pub(super) fn window_number(id: WindowId) -> u64 {
+    id.to_string().parse().unwrap_or_default()
+}
+
+pub(super) fn not_found(message: impl Into<String>) -> ErrorBody {
+    ErrorBody::new(ErrorCode::NotFound, message)
+}
+
+pub(super) fn sorted_workspaces(ctx: &AppContext) -> Vec<(WindowId, ViewHandle<Workspace>)> {
+    let mut workspaces = WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx);
+    workspaces.sort_by_key(|(window_id, _)| window_number(*window_id));
+    workspaces
+}
+
+pub(super) fn all_terminal_panes(ctx: &AppContext) -> Vec<PaneLocation> {
+    let mut panes = Vec::new();
+    for (window_id, workspace) in sorted_workspaces(ctx) {
+        for (tab_index, pane_group) in workspace.as_ref(ctx).tab_views().enumerate() {
+            let group = pane_group.as_ref(ctx);
+            for pane_id in group.visible_pane_ids() {
+                if let Some(terminal) = group.terminal_view_from_pane_id(pane_id, ctx) {
+                    panes.push(PaneLocation {
+                        window_id,
+                        workspace: workspace.clone(),
+                        tab_index,
+                        pane_group: pane_group.clone(),
+                        pane_id,
+                        terminal,
+                    });
+                }
+            }
+        }
+    }
+    panes
+}
+
+pub(super) fn find_pane(pane_id: u64, ctx: &AppContext) -> Result<PaneLocation, ErrorBody> {
+    all_terminal_panes(ctx)
+        .into_iter()
+        .find(|location| entity_number(location.terminal.id()) == pane_id)
+        .ok_or_else(|| not_found(format!("no terminal pane with pane_id {pane_id}")))
+}
+
+fn shell_pid(location: &PaneLocation, ctx: &AppContext) -> Option<u32> {
+    location
+        .terminal
+        .as_ref(ctx)
+        .model
+        .lock()
+        .shell_process_info()
+        .map(|shell| shell.pid)
+}
+
+fn pane_info(location: &PaneLocation, procs: &ProcessTable, ctx: &AppContext) -> PaneInfo {
+    let group = location.pane_group.as_ref(ctx);
+    let terminal = location.terminal.as_ref(ctx);
+    let (shell_pid, foreground_pgid, is_alt_screen) = {
+        let model = terminal.model.lock();
+        let shell = model.shell_process_info();
+        (
+            shell.map(|shell| shell.pid),
+            shell
+                .and_then(|shell| shell.pty_leader_fd)
+                .and_then(super::procinfo::foreground_pgid_of_fd),
+            model.is_alt_screen_active(),
+        )
+    };
+    let running_command = match terminal.session_command_context(ctx) {
+        CommandContext::RunningCommand { running_command } => Some(running_command),
+        _ => None,
+    };
+    let is_focused = ctx.windows().active_window() == Some(location.window_id)
+        && location.workspace.as_ref(ctx).active_tab_index() == location.tab_index
+        && group.focused_pane_id(ctx) == location.pane_id;
+    PaneInfo {
+        window_id: window_number(location.window_id),
+        tab_id: entity_number(location.pane_group.id()),
+        tab_index: location.tab_index,
+        pane_id: entity_number(location.terminal.id()),
+        title: group.display_title(ctx),
+        custom_title: group.custom_title(ctx),
+        cwd: terminal.pwd_if_local(ctx),
+        shell_pid,
+        foreground_pgid,
+        foreground_command: foreground_pgid.and_then(|pgid| procs.name(pgid)),
+        running_command,
+        is_alt_screen,
+        is_focused,
+    }
+}
+
+fn list(procs: &ProcessTable, ctx: &AppContext) -> ListResult {
+    ListResult {
+        panes: all_terminal_panes(ctx)
+            .iter()
+            .map(|location| pane_info(location, procs, ctx))
+            .collect(),
+    }
+}
+
+fn find_by_pid(pid: u32, procs: &ProcessTable, ctx: &AppContext) -> Result<PaneInfo, ErrorBody> {
+    let panes = all_terminal_panes(ctx);
+    let shells: Vec<(usize, u32)> = panes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, location)| shell_pid(location, ctx).map(|pid| (index, pid)))
+        .collect();
+    let index = find_pane_for_pid(pid, &shells, |pid| procs.parent(pid))
+        .ok_or_else(|| not_found(format!("no pane owns pid {pid}")))?;
+    Ok(pane_info(&panes[index], procs, ctx))
+}
 
 pub(super) fn handle(
     request: Request,
-    _procs: Option<ProcessTable>,
-    _ctx: &mut ModelContext<ForkControlHost>,
+    procs: Option<ProcessTable>,
+    ctx: &mut ModelContext<ForkControlHost>,
 ) -> Result<Value, ErrorBody> {
     match request {
         Request::Ping => to_value(ping()),
+        Request::List => {
+            let procs = procs.unwrap_or_else(ProcessTable::snapshot);
+            to_value(list(&procs, ctx))
+        }
+        Request::FindByPid(params) => {
+            let procs = procs.unwrap_or_else(ProcessTable::snapshot);
+            find_by_pid(params.pid, &procs, ctx).and_then(to_value)
+        }
         _ => Err(ErrorBody::new(ErrorCode::Internal, "not implemented yet")),
     }
 }
