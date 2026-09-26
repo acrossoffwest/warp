@@ -15454,6 +15454,7 @@ dependencies = [
  "warp_editor",
  "warp_errors",
  "warp_files",
+ "warp_fork_control",
  "warp_graphql",
  "warp_harness_usage",
  "warp_isolation_platform",

@@ -113,6 +113,9 @@ pub fn register_all_settings(ctx: &mut AppContext) {
 
     #[cfg(feature = "local_fs")]
     crate::util::file::external_editor::EditorSettings::register(ctx);
+
+    #[cfg(unix)]
+    crate::fork_control::ForkControlSettings::register(ctx); // fork_control:
 }
 
 /// Key written to the platform-native store after the first successful

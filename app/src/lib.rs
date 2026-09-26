@@ -65,6 +65,8 @@ mod prompt;
 mod quit_warning;
 mod referral_theme_status;
 pub mod remote_control;
+#[cfg(unix)]
+pub mod fork_control; // fork_control:
 #[allow(dead_code)]
 mod remote_server;
 mod resource_limits;
@@ -1920,6 +1922,10 @@ pub(crate) fn initialize_app(
                 log::warn!("remote_control disabled: {e:#}");
             }
         }
+
+        // fork_control: fork-only local control API (docs/fork-control-api.md).
+        #[cfg(unix)]
+        ctx.add_singleton_model(fork_control::ForkControlHost::new);
     }
 
     log::info!(
