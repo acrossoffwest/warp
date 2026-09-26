@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::types::{
-    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource, user_command,
+    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
+    is_valid_session_id, user_command,
 };
 use crate::terminal::CLIAgent;
 
@@ -235,4 +237,174 @@ pub fn agent_restore_plan(record: &SessionMemoryRecord) -> Result<RestorePlan, R
         command,
         permission_mode: record.permission_mode,
     })
+}
+
+pub const SESSION_FILE_START_TOLERANCE_SECONDS: i64 = 2;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSessionFile {
+    pub session_id: String,
+    pub created_at: i64,
+}
+
+pub fn match_session_file(
+    started_at: i64,
+    files: &[AgentSessionFile],
+    claimed: &HashSet<String>,
+) -> Option<String> {
+    files
+        .iter()
+        .filter(|file| {
+            file.created_at + SESSION_FILE_START_TOLERANCE_SECONDS >= started_at
+                && !claimed.contains(&file.session_id)
+        })
+        .min_by_key(|file| file.created_at)
+        .map(|file| file.session_id.clone())
+}
+
+pub fn resolve_missing_session_ids(
+    candidates: &mut [SessionMemoryRecord],
+    mut claimed: HashSet<String>,
+    mut session_files: impl FnMut(SessionMemorySource, &Path) -> Vec<AgentSessionFile>,
+) {
+    claimed.extend(
+        candidates
+            .iter()
+            .filter_map(|candidate| candidate.native_session_id.clone()),
+    );
+    let mut order = (0..candidates.len()).collect::<Vec<_>>();
+    order.sort_by_key(|&index| candidates[index].started_at);
+
+    for index in order {
+        let candidate = &candidates[index];
+        if candidate.native_session_id.is_some() {
+            continue;
+        }
+        let (Some(started_at), Some(cwd)) = (candidate.started_at, candidate.cwd.clone()) else {
+            continue;
+        };
+        let mut files = session_files(candidate.source, &cwd);
+        files.retain(|file| is_valid_session_id(&file.session_id));
+        if let Some(session_id) = match_session_file(started_at, &files, &claimed) {
+            claimed.insert(session_id.clone());
+            candidates[index].native_session_id = Some(session_id);
+        }
+    }
+}
+
+fn valid_native_session_id(record: &SessionMemoryRecord) -> Option<&str> {
+    record
+        .native_session_id
+        .as_deref()
+        .filter(|session_id| is_valid_session_id(session_id))
+}
+
+pub fn startup_agent_restore_plan(
+    record: &SessionMemoryRecord,
+) -> Result<RestorePlan, RestoreError> {
+    let (agent, continue_command) = match record.source {
+        SessionMemorySource::ClaudeCode => (CLIAgent::Claude, "claude --continue"),
+        SessionMemorySource::Codex => (CLIAgent::Codex, "codex resume --last"),
+        SessionMemorySource::WarpTerminal => return Err(RestoreError::UnsupportedSource),
+    };
+    let cwd = record
+        .cwd
+        .clone()
+        .ok_or_else(|| RestoreError::MissingWorkingDirectory(PathBuf::new()))?;
+    if !cwd.exists() {
+        return Err(RestoreError::MissingWorkingDirectory(cwd));
+    }
+
+    let command = match valid_native_session_id(record) {
+        Some(session_id) => {
+            agent.resume_command_preserving_permission(session_id, record.permission_mode)
+        }
+        None => match (record.permission_mode, agent.dangerous_flag()) {
+            (AgentPermissionMode::Dangerous, Some(flag)) => format!("{continue_command} {flag}"),
+            _ => continue_command.to_owned(),
+        },
+    };
+
+    Ok(RestorePlan::Agent {
+        agent,
+        cwd,
+        command,
+        permission_mode: record.permission_mode,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupRestoreSkip {
+    PaneGone,
+    DuplicateContinue,
+    Invalid(RestoreError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupRestoreTarget<W> {
+    ExistingPane {
+        window: W,
+        terminal_pane_uuid: Vec<u8>,
+        plan: RestorePlan,
+    },
+    NewTab {
+        plan: RestorePlan,
+    },
+    Skip(StartupRestoreSkip),
+}
+
+pub fn plan_startup_restore<W: Clone>(
+    candidates: &[SessionMemoryRecord],
+    restored_panes: &[(W, Vec<u8>)],
+    layout_restore_enabled: bool,
+) -> Vec<(String, StartupRestoreTarget<W>)> {
+    let mut ordered = candidates.iter().collect::<Vec<_>>();
+    ordered.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+
+    let mut continued: Vec<(SessionMemorySource, Option<PathBuf>)> = Vec::new();
+    ordered
+        .into_iter()
+        .map(|record| {
+            let target = startup_restore_target(record, restored_panes, layout_restore_enabled);
+            let target = match target {
+                StartupRestoreTarget::Skip(_) => target,
+                _ if valid_native_session_id(record).is_some() => target,
+                _ => {
+                    let key = (record.source, record.cwd.clone());
+                    if continued.contains(&key) {
+                        StartupRestoreTarget::Skip(StartupRestoreSkip::DuplicateContinue)
+                    } else {
+                        continued.push(key);
+                        target
+                    }
+                }
+            };
+            (record.id.clone(), target)
+        })
+        .collect()
+}
+
+fn startup_restore_target<W: Clone>(
+    record: &SessionMemoryRecord,
+    restored_panes: &[(W, Vec<u8>)],
+    layout_restore_enabled: bool,
+) -> StartupRestoreTarget<W> {
+    let plan = match startup_agent_restore_plan(record) {
+        Ok(plan) => plan,
+        Err(err) => return StartupRestoreTarget::Skip(StartupRestoreSkip::Invalid(err)),
+    };
+    let restored = record.terminal_pane_uuid.as_ref().and_then(|uuid| {
+        restored_panes
+            .iter()
+            .find(|(_, restored_uuid)| restored_uuid == uuid)
+    });
+    match restored {
+        Some((window, terminal_pane_uuid)) => StartupRestoreTarget::ExistingPane {
+            window: window.clone(),
+            terminal_pane_uuid: terminal_pane_uuid.clone(),
+            plan,
+        },
+        None if layout_restore_enabled => StartupRestoreTarget::Skip(StartupRestoreSkip::PaneGone),
+        None => StartupRestoreTarget::NewTab { plan },
+    }
 }
