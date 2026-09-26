@@ -28,7 +28,11 @@ fn default_socket_path_without_env(data_profile: Option<&str>) -> Option<PathBuf
                 .join(SOCKET_FILE_NAME),
         );
     }
-    dirs::data_local_dir().map(|base| base.join(app_dir).join("fork-control").join(SOCKET_FILE_NAME))
+    dirs::data_local_dir().map(|base| {
+        base.join(app_dir)
+            .join("fork-control")
+            .join(SOCKET_FILE_NAME)
+    })
 }
 
 #[cfg(test)]

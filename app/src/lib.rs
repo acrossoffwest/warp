@@ -37,6 +37,8 @@ mod experiments;
 mod external_secrets;
 #[cfg(target_family = "wasm")]
 mod font_fallback;
+#[cfg(unix)]
+pub mod fork_control; // fork_control:
 mod global_resource_handles;
 mod gpu_state;
 mod hold_to_quit;
@@ -65,8 +67,6 @@ mod prompt;
 mod quit_warning;
 mod referral_theme_status;
 pub mod remote_control;
-#[cfg(unix)]
-pub mod fork_control; // fork_control:
 #[allow(dead_code)]
 mod remote_server;
 mod resource_limits;

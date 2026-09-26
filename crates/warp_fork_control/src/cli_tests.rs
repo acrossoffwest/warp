@@ -13,14 +13,28 @@ fn request(args: &[&str]) -> (String, serde_json::Value) {
 fn maps_simple_commands() {
     assert_eq!(request(&["ping"]), ("ping".into(), json!({})));
     assert_eq!(request(&["list", "--json"]), ("list".into(), json!({})));
-    assert_eq!(request(&["focus", "12"]), ("focus".into(), json!({"pane_id": 12})));
-    assert_eq!(request(&["find-pid", "999"]), ("find_by_pid".into(), json!({"pid": 999})));
+    assert_eq!(
+        request(&["focus", "12"]),
+        ("focus".into(), json!({"pane_id": 12}))
+    );
+    assert_eq!(
+        request(&["find-pid", "999"]),
+        ("find_by_pid".into(), json!({"pid": 999}))
+    );
 }
 
 #[test]
 fn maps_open_with_options() {
     let (method, params) = request(&[
-        "open", "--cwd", "/tmp", "--cmd", "claude", "--title", "TEST", "--new-window", "--no-focus",
+        "open",
+        "--cwd",
+        "/tmp",
+        "--cmd",
+        "claude",
+        "--title",
+        "TEST",
+        "--new-window",
+        "--no-focus",
     ]);
     assert_eq!(method, "open_tab");
     assert_eq!(

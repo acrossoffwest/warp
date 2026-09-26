@@ -29,5 +29,8 @@ fn unrelated_pid_is_none() {
 #[test]
 fn parent_cycle_terminates() {
     let shells = [("a", 100)];
-    assert_eq!(find_pane_for_pid(5, &shells, parents(&[(5, 6), (6, 5)])), None);
+    assert_eq!(
+        find_pane_for_pid(5, &shells, parents(&[(5, 6), (6, 5)])),
+        None
+    );
 }

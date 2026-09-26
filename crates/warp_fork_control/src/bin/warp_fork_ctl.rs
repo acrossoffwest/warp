@@ -63,7 +63,8 @@ fn print_table(list: &warp_fork_control::protocol::ListResult) {
             pane.tab_id,
             pane.window_id,
             pane.shell_pid.map_or_else(dash, |pid| pid.to_string()),
-            pane.foreground_pgid.map_or_else(dash, |pid| pid.to_string()),
+            pane.foreground_pgid
+                .map_or_else(dash, |pid| pid.to_string()),
             if pane.is_alt_screen { "yes" } else { "" },
             if pane.is_focused { "*" } else { "" },
             pane.title,

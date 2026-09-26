@@ -6,7 +6,10 @@ use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
 #[derive(Debug, Parser)]
-#[command(name = "warp-fork-ctl", about = "Drive this Warp fork over its local fork-control socket")]
+#[command(
+    name = "warp-fork-ctl",
+    about = "Drive this Warp fork over its local fork-control socket"
+)]
 pub struct Cli {
     /// Socket path (default: $WARP_FORK_CONTROL_SOCKET or the per-profile default).
     #[arg(long, global = true)]
@@ -72,7 +75,13 @@ impl Command {
             Command::Ping => ("ping", json!({})),
             Command::List { .. } => ("list", json!({})),
             Command::Focus { pane_id } => ("focus", json!({"pane_id": pane_id})),
-            Command::Open { cwd, cmd, title, new_window, no_focus } => {
+            Command::Open {
+                cwd,
+                cmd,
+                title,
+                new_window,
+                no_focus,
+            } => {
                 let cwd = std::path::absolute(cwd)?;
                 let mut params = json!({
                     "cwd": cwd.to_string_lossy(),
@@ -87,7 +96,12 @@ impl Command {
                 }
                 ("open_tab", params)
             }
-            Command::Title { id, title, pane, clear } => {
+            Command::Title {
+                id,
+                title,
+                pane,
+                clear,
+            } => {
                 let title = match (title, clear) {
                     (_, true) => Value::Null,
                     (Some(title), false) => json!(title),
@@ -96,7 +110,13 @@ impl Command {
                 let key = if *pane { "pane_id" } else { "tab_id" };
                 ("set_title", json!({ key: id, "title": title }))
             }
-            Command::Send { pane_id, text, submit, allow_shell, keys } => {
+            Command::Send {
+                pane_id,
+                text,
+                submit,
+                allow_shell,
+                keys,
+            } => {
                 let text = if text == "-" {
                     let mut buffer = String::new();
                     std::io::stdin().read_to_string(&mut buffer)?;

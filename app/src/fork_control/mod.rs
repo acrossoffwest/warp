@@ -122,20 +122,26 @@ fn start_server(job_tx: async_channel::Sender<Job>) -> Option<Server> {
 }
 
 fn dispatch(job_tx: &async_channel::Sender<Job>, request: Request) -> Result<Value, ErrorBody> {
-    let procs = matches!(request, Request::List | Request::FindByPid(_))
-        .then(ProcessTable::snapshot);
+    let procs =
+        matches!(request, Request::List | Request::FindByPid(_)).then(ProcessTable::snapshot);
     let (reply, reply_rx) = mpsc::channel();
     job_tx
-        .try_send(Job { request, procs, reply })
+        .try_send(Job {
+            request,
+            procs,
+            reply,
+        })
         .map_err(|_| ErrorBody::new(ErrorCode::Unavailable, "Warp is shutting down"))?;
-    reply_rx.recv_timeout(UI_TIMEOUT).map_err(|error| match error {
-        RecvTimeoutError::Timeout => {
-            ErrorBody::new(ErrorCode::Timeout, "Warp did not answer in time")
-        }
-        RecvTimeoutError::Disconnected => {
-            ErrorBody::new(ErrorCode::Internal, "Warp dropped the request")
-        }
-    })?
+    reply_rx
+        .recv_timeout(UI_TIMEOUT)
+        .map_err(|error| match error {
+            RecvTimeoutError::Timeout => {
+                ErrorBody::new(ErrorCode::Timeout, "Warp did not answer in time")
+            }
+            RecvTimeoutError::Disconnected => {
+                ErrorBody::new(ErrorCode::Internal, "Warp dropped the request")
+            }
+        })?
 }
 
 #[cfg(test)]

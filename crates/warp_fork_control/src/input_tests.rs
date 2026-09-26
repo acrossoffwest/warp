@@ -11,7 +11,10 @@ fn running_command_goes_to_pty() {
 
 #[test]
 fn alt_screen_goes_to_pty_even_without_running_block() {
-    assert_eq!(route_input(PaneActivity::AtPrompt, true, false), Ok(InputRoute::Pty));
+    assert_eq!(
+        route_input(PaneActivity::AtPrompt, true, false),
+        Ok(InputRoute::Pty)
+    );
 }
 
 #[test]
@@ -44,12 +47,18 @@ fn paste_wraps_and_normalizes_newlines_when_bracketed() {
 
 #[test]
 fn paste_without_bracketed_mode_is_raw() {
-    assert_eq!(encode_pty_text("a\nb", InputMode::Paste, false), b"a\rb".to_vec());
+    assert_eq!(
+        encode_pty_text("a\nb", InputMode::Paste, false),
+        b"a\rb".to_vec()
+    );
 }
 
 #[test]
 fn keys_never_wrap() {
-    assert_eq!(encode_pty_text("a\nb", InputMode::Keys, true), b"a\rb".to_vec());
+    assert_eq!(
+        encode_pty_text("a\nb", InputMode::Keys, true),
+        b"a\rb".to_vec()
+    );
 }
 
 #[test]

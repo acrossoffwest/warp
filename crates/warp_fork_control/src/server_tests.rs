@@ -37,7 +37,11 @@ fn serves_requests_and_sets_permissions() {
 
     let socket_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(socket_mode, 0o600);
-    let dir_mode = std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777;
+    let dir_mode = std::fs::metadata(path.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
     assert_eq!(dir_mode, 0o700);
 
     let mut stream = UnixStream::connect(server.path()).unwrap();
@@ -82,7 +86,10 @@ fn non_utf8_input_closes_only_that_connection() {
     drop(garbage);
 
     let mut stream = UnixStream::connect(server.path()).unwrap();
-    assert_eq!(roundtrip(&mut stream, r#"{"method":"ping"}"#)["ok"], json!(true));
+    assert_eq!(
+        roundtrip(&mut stream, r#"{"method":"ping"}"#)["ok"],
+        json!(true)
+    );
 }
 
 #[test]
@@ -121,7 +128,8 @@ fn drop_does_not_hang_or_delete_replacement_socket() {
         drop(server);
         let _ = tx.send(());
     });
-    rx.recv_timeout(Duration::from_secs(2)).expect("Server::drop hung");
+    rx.recv_timeout(Duration::from_secs(2))
+        .expect("Server::drop hung");
 
     assert!(path.exists());
     drop(replacement);
@@ -132,7 +140,9 @@ fn drop_closes_live_connections() {
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(&socket_in(&dir), echo_handler()).unwrap();
     let mut stream = UnixStream::connect(server.path()).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
     roundtrip(&mut stream, r#"{"method":"ping"}"#);
 
     drop(server);

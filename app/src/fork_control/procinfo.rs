@@ -29,6 +29,9 @@ impl ProcessTable {
     }
 
     pub(crate) fn parent(&self, pid: u32) -> Option<u32> {
-        self.0.process(Pid::from_u32(pid))?.parent().map(|pid| pid.as_u32())
+        self.0
+            .process(Pid::from_u32(pid))?
+            .parent()
+            .map(|pid| pid.as_u32())
     }
 }

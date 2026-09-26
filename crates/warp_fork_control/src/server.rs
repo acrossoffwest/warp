@@ -39,9 +39,14 @@ pub struct Server {
 impl Server {
     pub fn start(path: &Path, handler: Handler) -> Result<Server> {
         if path.as_os_str().len() > MAX_SOCKET_PATH_LEN {
-            bail!("socket path is too long for a Unix socket: {}", path.display());
+            bail!(
+                "socket path is too long for a Unix socket: {}",
+                path.display()
+            );
         }
-        let dir = path.parent().context("socket path has no parent directory")?;
+        let dir = path
+            .parent()
+            .context("socket path has no parent directory")?;
         if !dir.exists() {
             std::fs::DirBuilder::new()
                 .recursive(true)
@@ -146,7 +151,9 @@ fn accept_loop(
                     log::warn!("fork_control: rejected a connection from another user");
                     continue;
                 }
-                let Ok(registered) = stream.try_clone() else { continue };
+                let Ok(registered) = stream.try_clone() else {
+                    continue;
+                };
                 let id = next_id;
                 next_id += 1;
                 if let Ok(mut connections) = connections.lock() {
@@ -190,7 +197,9 @@ fn accept_loop(
 }
 
 fn serve_connection(stream: UnixStream, handler: Handler, stop: Arc<AtomicBool>) {
-    let Ok(read_half) = stream.try_clone() else { return };
+    let Ok(read_half) = stream.try_clone() else {
+        return;
+    };
     let mut writer = stream;
     for line in BufReader::new(read_half).lines() {
         if stop.load(Ordering::SeqCst) {
@@ -213,19 +222,17 @@ pub fn handle_line(line: &str, handler: &Handler) -> Value {
             log::warn!("fork_control: rejected request: {}", error.message);
             error_response(id, &error)
         }
-        Ok(Envelope { id, request }) => {
-            match catch_unwind(AssertUnwindSafe(|| handler(request))) {
-                Ok(Ok(result)) => ok_response(id, result),
-                Ok(Err(error)) => error_response(id, &error),
-                Err(_) => {
-                    log::error!("fork_control: request handler panicked");
-                    error_response(
-                        id,
-                        &ErrorBody::new(ErrorCode::Internal, "request handler panicked"),
-                    )
-                }
+        Ok(Envelope { id, request }) => match catch_unwind(AssertUnwindSafe(|| handler(request))) {
+            Ok(Ok(result)) => ok_response(id, result),
+            Ok(Err(error)) => error_response(id, &error),
+            Err(_) => {
+                log::error!("fork_control: request handler panicked");
+                error_response(
+                    id,
+                    &ErrorBody::new(ErrorCode::Internal, "request handler panicked"),
+                )
             }
-        }
+        },
     }
 }
 

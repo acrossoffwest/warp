@@ -13,7 +13,10 @@ fn parse_err(line: &str) -> (Option<serde_json::Value>, ErrorBody) {
 #[test]
 fn parses_ping_and_list_without_params() {
     assert_eq!(parse_ok(r#"{"method":"ping"}"#).request, Request::Ping);
-    assert_eq!(parse_ok(r#"{"method":"list","params":{}}"#).request, Request::List);
+    assert_eq!(
+        parse_ok(r#"{"method":"list","params":{}}"#).request,
+        Request::List
+    );
 }
 
 #[test]
@@ -62,7 +65,11 @@ fn set_title_requires_exactly_one_target() {
     let envelope = parse_ok(r#"{"method":"set_title","params":{"tab_id":1,"title":null}}"#);
     assert_eq!(
         envelope.request,
-        Request::SetTitle(SetTitleParams { tab_id: Some(1), pane_id: None, title: None })
+        Request::SetTitle(SetTitleParams {
+            tab_id: Some(1),
+            pane_id: None,
+            title: None
+        })
     );
 }
 
@@ -92,14 +99,18 @@ fn unknown_method_keeps_id() {
 fn wrong_param_types_are_bad_request() {
     let (_, error) = parse_err(r#"{"method":"focus","params":{"pane_id":"seven"}}"#);
     assert_eq!(error.code, ErrorCode::BadRequest);
-    let (_, error) = parse_err(r#"{"method":"send_input","params":{"pane_id":1,"text":"x","mode":"typing"}}"#);
+    let (_, error) =
+        parse_err(r#"{"method":"send_input","params":{"pane_id":1,"text":"x","mode":"typing"}}"#);
     assert_eq!(error.code, ErrorCode::BadRequest);
 }
 
 #[test]
 fn responses_carry_api_version() {
     let ok = ok_response(Some(json!(1)), json!({"a": 1}));
-    assert_eq!(ok, json!({"id": 1, "api_version": 1, "ok": true, "result": {"a": 1}}));
+    assert_eq!(
+        ok,
+        json!({"id": 1, "api_version": 1, "ok": true, "result": {"a": 1}})
+    );
     let err = error_response(None, &ErrorBody::new(ErrorCode::NotInTui, "nope"));
     assert_eq!(
         err,
