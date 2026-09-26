@@ -48,10 +48,15 @@ pub fn test_fork_control_api() -> Builder {
                             "open_tab",
                             json!({"cwd": cwd, "title": "FC-TEST", "command": "echo fork-control"}),
                         )?;
+                        let renamed = call(
+                            "set_title",
+                            json!({"pane_id": open["result"]["pane_id"], "title": "FC-TEST"}),
+                        )?;
                         let at_prompt =
                             call("send_input", json!({"pane_id": first_pane, "text": "x"}))?;
+                        let focused = call("focus", json!({"pane_id": first_pane}))?;
                         let missing = call("focus", json!({"pane_id": 999_999_999u64}))?;
-                        Ok(vec![ping, list, open, at_prompt, missing])
+                        Ok(vec![ping, list, open, renamed, at_prompt, focused, missing])
                     })();
                     *writer.lock().unwrap() = Some(outcome);
                 });
@@ -70,8 +75,10 @@ pub fn test_fork_control_api() -> Builder {
                             return async_assert!(false, "fork control call failed: {error}");
                         }
                     };
-                    let [ping, list, open, at_prompt, missing] = results.as_slice() else {
-                        return async_assert!(false, "expected 5 results");
+                    let [ping, list, open, renamed, at_prompt, focused, missing] =
+                        results.as_slice()
+                    else {
+                        return async_assert!(false, "expected 7 results");
                     };
                     async_assert!(
                         ping["ok"] == json!(true)
@@ -82,6 +89,8 @@ pub fn test_fork_control_api() -> Builder {
                             && list["result"]["panes"][0]["shell_pid"].is_u64()
                             && open["ok"] == json!(true)
                             && open["result"]["pane_id"].is_u64()
+                            && renamed["ok"] == json!(true)
+                            && focused["ok"] == json!(true)
                             && at_prompt["error"]["code"] == json!("not_in_tui")
                             && missing["error"]["code"] == json!("not_found"),
                         "unexpected results: {results:?}"
