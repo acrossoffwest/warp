@@ -5,8 +5,6 @@ use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 #[cfg(not(target_family = "wasm"))]
 use session_sharing_protocol::sharer::SessionSourceType;
 use url::Url;
@@ -14,6 +12,7 @@ use url::Url;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{
     AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
 };
@@ -56,10 +55,7 @@ use crate::pane_group::child_agent::{
     ErrorChildAgentConversationRequest, create_error_child_agent_conversation,
 };
 use crate::pane_group::{self, Direction, PaneGroup};
-use crate::persistence::{
-    AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
-    SessionMemoryStatus,
-};
+use crate::persistence::SessionMemoryRecord;
 use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
@@ -67,13 +63,14 @@ use crate::server::team_scope::RequestTeamScope;
 use crate::session_management::CommandContext;
 use crate::session_management::SessionNavigationData;
 use crate::session_memory::model::SessionMemoryModel;
-use crate::session_memory::types::{
-    terminal_agent_command, user_command as session_memory_user_command,
+use crate::session_memory::recording::{
+    PaneRecordInput, block_timestamp_seconds, pane_session_memory_record, record_id_for_pane_uuid,
 };
-use crate::terminal::CLIAgent;
+use crate::session_memory::types::user_command as session_memory_user_command;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::cli_agent_sessions::{CLIAgentSession, CLIAgentSessionStatus};
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModelEvent;
 use crate::terminal::general_settings::GeneralSettings;
+use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::shared_session::SharedSessionSource;
 use crate::terminal::shared_session::manager::{Manager, ManagerEvent};
@@ -141,89 +138,41 @@ fn terminal_last_command(command_context: CommandContext) -> Option<String> {
     }
 }
 
-fn session_memory_record_id_for_uuid(uuid: &[u8]) -> String {
-    format!("warp_terminal:{}", BASE64_STANDARD.encode(uuid))
-}
-
-fn session_memory_source_for_cli_agent(agent: CLIAgent) -> Option<SessionMemorySource> {
-    match agent {
-        CLIAgent::Claude => Some(SessionMemorySource::ClaudeCode),
-        CLIAgent::Codex => Some(SessionMemorySource::Codex),
-        _ => None,
-    }
-}
-
-fn session_memory_status_for_cli_agent(status: &CLIAgentSessionStatus) -> SessionMemoryStatus {
-    match status {
-        CLIAgentSessionStatus::InProgress
-        | CLIAgentSessionStatus::Failed { .. }
-        | CLIAgentSessionStatus::Cancelled => SessionMemoryStatus::Live,
-        CLIAgentSessionStatus::Success => SessionMemoryStatus::Success,
-        CLIAgentSessionStatus::Blocked { .. } => SessionMemoryStatus::Blocked,
-    }
-}
-
-fn cli_agent_session_memory_record(
+fn session_memory_record_for_pane(
     uuid: &[u8],
     terminal_view: &ViewHandle<TerminalView>,
-    session: &CLIAgentSession,
-    last_command: Option<String>,
     ctx: &AppContext,
-) -> Option<SessionMemoryRecord> {
-    let source = session_memory_source_for_cli_agent(session.agent)?;
-    let native_session_id = session.session_context.session_id.clone()?;
-    let cwd = session
-        .session_context
-        .cwd
-        .clone()
-        .or_else(|| terminal_view.as_ref(ctx).pwd_if_local(ctx))
-        .map(PathBuf::from);
-    let title = session
-        .session_context
-        .display_title()
-        .or_else(|| last_command.clone())
-        .unwrap_or_else(|| format!("{} session", session.agent.display_name()));
-    let permission_mode = terminal_agent_command(last_command.as_deref())
-        .map(|command| command.permission_mode)
-        .unwrap_or(AgentPermissionMode::Unknown);
-    let launch_argv = last_command.as_ref().map(|command| {
-        command
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    });
+) -> SessionMemoryRecord {
+    let view = terminal_view.as_ref(ctx);
+    let (running_command, running_command_started_at) = {
+        let model = view.model.lock();
+        let active_block = model.block_list().active_block();
+        if active_block.is_active_and_long_running() {
+            (
+                Some(active_block.command_to_string()),
+                block_timestamp_seconds(active_block.start_ts()),
+            )
+        } else {
+            (None, None)
+        }
+    };
+    let restore_payload = view
+        .shell_launch_data_if_local(ctx)
+        .and_then(|shell_launch_data| serde_json::to_value(shell_launch_data).ok())
+        .map(|shell_launch_data| serde_json::json!({ "shell_launch_data": shell_launch_data }));
 
-    Some(SessionMemoryRecord {
-        id: session_memory_record_id_for_uuid(uuid),
-        source,
-        kind: SessionMemoryKind::AgentChat,
-        status: session_memory_status_for_cli_agent(&session.status),
-        title,
-        summary: session.session_context.summary.clone(),
-        cwd,
-        project: session.session_context.project.clone(),
-        native_session_id: Some(native_session_id),
-        transcript_path: session
-            .session_context
-            .transcript_path
-            .as_ref()
-            .map(PathBuf::from),
-        terminal_pane_uuid: Some(uuid.to_vec()),
-        app_window_fingerprint: None,
-        app_tab_fingerprint: None,
-        last_command,
-        last_exit_code: None,
-        launch_argv,
-        permission_mode,
-        last_seen_at: now_unix_seconds(),
-        started_at: None,
-        completed_at: None,
-        closed_intentionally_at: None,
+    pane_session_memory_record(PaneRecordInput {
+        uuid,
+        cwd: view.pwd_if_local(ctx).map(PathBuf::from),
+        running_command,
+        running_command_started_at,
+        last_command: terminal_last_command(view.session_command_context(ctx)),
+        cli_agent_session: CLIAgentSessionsModel::as_ref(ctx).session(terminal_view.id()),
+        restore_payload,
         app_run_id: ctx
             .has_singleton_model::<SessionMemoryModel>()
             .then(|| SessionMemoryModel::as_ref(ctx).current_run_id().to_string()),
-        recovery_offered_run_id: None,
-        restore_payload: None,
+        now: now_unix_seconds(),
     })
 }
 
@@ -352,7 +301,7 @@ impl TerminalPane {
     }
 
     fn session_memory_record_id(&self) -> String {
-        session_memory_record_id_for_uuid(&self.uuid)
+        record_id_for_pane_uuid(&self.uuid)
     }
 
     fn mark_session_memory_record_closed(&self, ctx: &AppContext) {
@@ -377,12 +326,7 @@ impl TerminalPane {
         }
     }
 
-    fn upsert_session_memory_record(
-        &self,
-        snapshot: &TerminalPaneSnapshot,
-        last_command: Option<String>,
-        ctx: &AppContext,
-    ) {
+    fn upsert_session_memory_record(&self, ctx: &AppContext) {
         if !AppExecutionMode::as_ref(ctx).can_save_session() {
             return;
         }
@@ -392,76 +336,42 @@ impl TerminalPane {
         };
 
         let terminal_view = self.terminal_view(ctx);
-        if let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(terminal_view.id()) {
-            if let Some(record) = cli_agent_session_memory_record(
-                &self.uuid,
-                &terminal_view,
-                session,
-                last_command.clone(),
-                ctx,
-            ) {
-                if let Err(err) = sender.send(ModelEvent::UpsertSessionMemoryRecord { record }) {
-                    log::error!(
-                        "Error sending CLI agent session memory upsert event for terminal id {} {:?}",
-                        terminal_view.id(),
-                        err
-                    );
-                }
-                return;
-            }
-        }
-
-        let restore_payload = snapshot
-            .shell_launch_data
-            .as_ref()
-            .and_then(|shell_launch_data| serde_json::to_value(shell_launch_data).ok())
-            .map(|shell_launch_data| {
-                serde_json::json!({
-                    "shell_launch_data": shell_launch_data,
-                })
-            });
-
-        let title = last_command
-            .clone()
-            .or_else(|| snapshot.cwd.clone())
-            .unwrap_or_else(|| "Terminal".to_string());
-
-        let mut record = SessionMemoryRecord {
-            id: self.session_memory_record_id(),
-            source: SessionMemorySource::WarpTerminal,
-            kind: SessionMemoryKind::Terminal,
-            status: SessionMemoryStatus::Live,
-            title,
-            summary: None,
-            cwd: snapshot.cwd.as_ref().map(PathBuf::from),
-            project: None,
-            native_session_id: None,
-            transcript_path: None,
-            terminal_pane_uuid: Some(self.uuid.clone()),
-            app_window_fingerprint: None,
-            app_tab_fingerprint: None,
-            last_command,
-            last_exit_code: None,
-            launch_argv: None,
-            permission_mode: AgentPermissionMode::Unknown,
-            last_seen_at: now_unix_seconds(),
-            started_at: None,
-            completed_at: None,
-            closed_intentionally_at: None,
-            app_run_id: ctx
-                .has_singleton_model::<SessionMemoryModel>()
-                .then(|| SessionMemoryModel::as_ref(ctx).current_run_id().to_string()),
-            recovery_offered_run_id: None,
-            restore_payload,
-        };
-        record.normalize_terminal_agent_command();
-
+        let record = session_memory_record_for_pane(&self.uuid, &terminal_view, ctx);
         if let Err(err) = sender.send(ModelEvent::UpsertSessionMemoryRecord { record }) {
             log::error!(
                 "Error sending session memory upsert event for terminal id {} {:?}",
-                self.terminal_view(ctx).id(),
+                terminal_view.id(),
                 err
             );
+        }
+    }
+
+    pub(in crate::pane_group) fn mark_session_memory_agent_ended(
+        &self,
+        block: &SerializedBlock,
+        ctx: &AppContext,
+    ) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session()
+            || ctx.windows().stage() == ApplicationStage::Terminating
+        {
+            return;
+        }
+        let Some(sender) = &self.model_event_sender else {
+            return;
+        };
+        let Some(started_at) = block_timestamp_seconds(block.start_ts.as_ref()) else {
+            return;
+        };
+        let completed_at =
+            block_timestamp_seconds(block.completed_ts.as_ref()).unwrap_or_else(now_unix_seconds);
+
+        let model_event = ModelEvent::MarkSessionMemoryAgentEnded {
+            id: self.session_memory_record_id(),
+            started_at,
+            completed_at,
+        };
+        if let Err(err) = sender.send(model_event) {
+            log::error!("Error sending session memory agent end event: {err:?}");
         }
     }
 
@@ -556,26 +466,14 @@ impl PaneContent for TerminalPane {
             let terminal_view = self.terminal_view(ctx);
             ctx.subscribe_to_model(
                 &CLIAgentSessionsModel::handle(ctx),
-                move |_group, sessions_model, event, ctx| {
-                    if event.terminal_view_id() != terminal_view_id {
+                move |_group, _sessions_model, event, ctx| {
+                    if event.terminal_view_id() != terminal_view_id
+                        || matches!(event, CLIAgentSessionsModelEvent::Ended { .. })
+                    {
                         return;
                     }
 
-                    let Some(session) = sessions_model.as_ref(ctx).session(terminal_view_id) else {
-                        return;
-                    };
-                    let last_command =
-                        terminal_last_command(terminal_view.as_ref(ctx).session_command_context(ctx));
-                    let Some(record) = cli_agent_session_memory_record(
-                        &uuid,
-                        &terminal_view,
-                        session,
-                        last_command,
-                        ctx,
-                    ) else {
-                        return;
-                    };
-
+                    let record = session_memory_record_for_pane(&uuid, &terminal_view, ctx);
                     if let Err(err) =
                         model_event_sender.send(ModelEvent::UpsertSessionMemoryRecord { record })
                     {
@@ -842,11 +740,7 @@ impl PaneContent for TerminalPane {
                 conversation_ids_to_restore,
                 active_conversation_id,
             };
-            self.upsert_session_memory_record(
-                &snapshot,
-                terminal_last_command(view.session_command_context(app)),
-                app,
-            );
+            self.upsert_session_memory_record(app);
             LeafContents::Terminal(snapshot)
         }
     }
@@ -1280,6 +1174,7 @@ fn handle_terminal_view_event(
             Event::BlockCompleted { block, is_local } => {
                 match group.terminal_session_by_id(pane_id) {
                     Some(pane) => {
+                        pane.mark_session_memory_agent_ended(block, ctx);
                         if *GeneralSettings::as_ref(ctx).restore_session
                             && AppExecutionMode::as_ref(ctx).can_save_session()
                             && let Some(sender) = &group.model_event_sender

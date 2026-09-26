@@ -326,26 +326,6 @@ fn should_suppress_restored_tab_only_when_every_pane_was_closed_intentionally() 
 }
 
 #[test]
-fn mark_agent_session_ended_sets_completed_at() {
-    let mut record = test_record("live-claude-session");
-    record.source = SessionMemorySource::ClaudeCode;
-    record.status = SessionMemoryStatus::Live;
-    record.native_session_id = Some("session-id".to_string());
-    record.completed_at = None;
-
-    let mut model = SessionMemoryModel::new_with_run_state(
-        vec![record],
-        None,
-        SessionMemoryRunState::new("current-run", None),
-    );
-
-    model.mark_agent_session_ended("live-claude-session");
-
-    let record = &model.records()[0];
-    assert!(record.completed_at.is_some());
-}
-
-#[test]
 fn startup_auto_restore_records_includes_resumable_sessions_from_clean_previous_run() {
     let mut claude = test_record("claude-session");
     claude.source = SessionMemorySource::ClaudeCode;

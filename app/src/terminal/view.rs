@@ -12477,23 +12477,6 @@ impl TerminalView {
                     // The auto-toggle flag is irrelevant here because the
                     // session is removed immediately afterwards.
                     self.close_cli_agent_rich_input(CLIAgentRichInputCloseReason::Other, ctx);
-                    // The agent process exited while the pane stays open: the
-                    // user ended the chat, so it must not be auto-restored on
-                    // the next startup. Pane close and app shutdown do not go
-                    // through this path.
-                    let ended_native_session_id = CLIAgentSessionsModel::as_ref(ctx)
-                        .session(self.view_id)
-                        .and_then(|session| session.session_context.session_id.clone());
-                    if let Some(native_session_id) = ended_native_session_id
-                        && ctx.has_singleton_model::<crate::SessionMemoryModel>()
-                    {
-                        crate::SessionMemoryModel::handle(ctx).update(ctx, |model, ctx| {
-                            model.mark_agent_session_ended_for_native_session_and_notify(
-                                &native_session_id,
-                                ctx,
-                            );
-                        });
-                    }
                     CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
                         sessions_model.remove_session(self.view_id, ctx);
                     });

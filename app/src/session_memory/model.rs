@@ -301,53 +301,6 @@ impl SessionMemoryModel {
         })
     }
 
-    /// Marks the record's CLI agent session as ended by the user (the agent
-    /// process exited while the pane stayed open). Such records are kept on
-    /// the board but excluded from startup auto-restore.
-    pub fn mark_agent_session_ended(&mut self, id: &str) {
-        let Some(record) = self.records.iter_mut().find(|record| record.id == id) else {
-            return;
-        };
-        if record.completed_at.is_some() {
-            return;
-        }
-        record.completed_at = Some(now_unix_seconds());
-        let record = record.clone();
-
-        if let Some(event_sink) = &self.event_sink {
-            event_sink(SessionMemoryModelEvent::UpsertRecord { record });
-        }
-    }
-
-    pub fn mark_agent_session_ended_and_notify(&mut self, id: &str, ctx: &mut ModelContext<Self>) {
-        self.mark_agent_session_ended(id);
-        if let Some(record) = self.records.iter().find(|record| record.id == id) {
-            ctx.emit(SessionMemoryModelEvent::UpsertRecord {
-                record: record.clone(),
-            });
-        }
-    }
-
-    /// Marks every record bound to this native agent session as ended.
-    pub fn mark_agent_session_ended_for_native_session_and_notify(
-        &mut self,
-        native_session_id: &str,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let ids = self
-            .records
-            .iter()
-            .filter(|record| {
-                record.native_session_id.as_deref() == Some(native_session_id)
-                    && record.completed_at.is_none()
-            })
-            .map(|record| record.id.clone())
-            .collect::<Vec<_>>();
-        for id in ids {
-            self.mark_agent_session_ended_and_notify(&id, ctx);
-        }
-    }
-
     pub fn mark_startup_recovery_offered(&mut self, ids: &[String]) {
         let mut changed_records = Vec::new();
         for record in &mut self.records {
