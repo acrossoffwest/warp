@@ -7,7 +7,8 @@ use chrono::{DateTime, Local};
 use super::restore::is_env_assignment;
 use super::types::{
     AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
-    SessionMemoryStatus, is_valid_session_id, terminal_agent_command, user_command,
+    SessionMemoryStatus, is_agent_maintenance_command, is_valid_session_id, terminal_agent_command,
+    user_command,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSession;
@@ -166,5 +167,8 @@ fn running_agent(
         return Some((agent_command.source, agent_command.permission_mode));
     }
     let source = cli_agent_session.and_then(|session| source_for_cli_agent(session.agent))?;
+    if is_agent_maintenance_command(source, command) {
+        return None;
+    }
     Some((source, AgentPermissionMode::Unknown))
 }

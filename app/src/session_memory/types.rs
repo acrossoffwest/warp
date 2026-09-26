@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::restore::is_env_assignment;
+
 pub const COMMAND_PREVIEW_MAX_CHARS: usize = 120;
 
 pub fn is_internal_warp_command(command: &str) -> bool {
@@ -131,20 +133,18 @@ pub struct TerminalAgentCommand {
 
 pub fn terminal_agent_command(command: Option<&str>) -> Option<TerminalAgentCommand> {
     let command = user_command(command)?;
-    let command_token = command.split_whitespace().find(|token| {
-        token.split_once('=').map(|(name, _)| {
-            !name.is_empty()
-                && name
-                    .chars()
-                    .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-        }) != Some(true)
-    })?;
+    let command_token = command
+        .split_whitespace()
+        .find(|token| !is_env_assignment(token))?;
 
     let source = match command_token {
         "claude" => SessionMemorySource::ClaudeCode,
         "codex" => SessionMemorySource::Codex,
         _ => return None,
     };
+    if is_agent_maintenance_command(source, &command) {
+        return None;
+    }
 
     let dangerous_flag = match source {
         SessionMemorySource::ClaudeCode => "--dangerously-skip-permissions",
@@ -164,6 +164,27 @@ pub fn terminal_agent_command(command: Option<&str>) -> Option<TerminalAgentComm
         source,
         permission_mode,
     })
+}
+
+pub fn is_agent_maintenance_command(source: SessionMemorySource, command: &str) -> bool {
+    let subcommand = command
+        .split_whitespace()
+        .skip_while(|token| is_env_assignment(token))
+        .nth(1);
+    match (source, subcommand) {
+        (
+            SessionMemorySource::ClaudeCode,
+            Some(
+                "update" | "mcp" | "setup-token" | "doctor" | "config" | "install"
+                | "migrate-installer",
+            ),
+        ) => true,
+        (
+            SessionMemorySource::Codex,
+            Some("login" | "logout" | "mcp" | "completion" | "apply"),
+        ) => true,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

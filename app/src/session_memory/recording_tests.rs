@@ -230,6 +230,27 @@ fn running_non_agent_command_records_terminal() {
 }
 
 #[test]
+fn agent_maintenance_subcommands_record_terminal() {
+    let claude = plugin_session(CLIAgent::Claude, CLIAgentSessionStatus::InProgress, None);
+    let codex = plugin_session(CLIAgent::Codex, CLIAgentSessionStatus::InProgress, None);
+    for (command, session) in [
+        ("claude update", &claude),
+        ("claude mcp add foo", &claude),
+        ("claude doctor", &claude),
+        ("codex login", &codex),
+        ("codex mcp list", &codex),
+        ("codex completion zsh", &codex),
+    ] {
+        for session in [None, Some(session)] {
+            let record = pane_session_memory_record(input(Some(command), Some(10), None, session));
+
+            assert_eq!(record.source, SessionMemorySource::WarpTerminal, "{command}");
+            assert_eq!(record.kind, SessionMemoryKind::Terminal, "{command}");
+        }
+    }
+}
+
+#[test]
 fn record_started_at_matches_block_timestamp_seconds() {
     let block_start = Local.timestamp_millis_opt(1_700_000_000_900).unwrap();
     let started_at = block_timestamp_seconds(Some(&block_start));
