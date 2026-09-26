@@ -1,14 +1,21 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use warp_core::channel::ChannelState;
 use warp_fork_control::pids::find_pane_for_pid;
 use warp_fork_control::protocol::{
-    API_VERSION, ErrorBody, ErrorCode, ListResult, PaneInfo, PingResult, Request, SetTitleParams,
+    API_VERSION, ErrorBody, ErrorCode, ListResult, OpenTabParams, OpenTabResult, PaneInfo,
+    PingResult, Request, SetTitleParams, WindowTarget,
 };
+use warpui::windowing::WindowManager;
 use warpui::{AppContext, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
 use super::ForkControlHost;
 use super::procinfo::ProcessTable;
-use crate::pane_group::{PaneGroup, PaneId};
+use crate::pane_group::{NewTerminalOptions, PaneGroup, PaneId, PanesLayout};
+use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
 use crate::session_management::CommandContext;
 use crate::terminal::TerminalView;
 use crate::workspace::{Workspace, WorkspaceRegistry};
@@ -205,6 +212,111 @@ fn set_title(
     Ok(())
 }
 
+fn target_window(ctx: &AppContext) -> Option<(WindowId, ViewHandle<Workspace>)> {
+    let windows = WindowManager::as_ref(ctx);
+    let preferred = windows
+        .active_window()
+        .or_else(|| windows.frontmost_window_id());
+    let registry = WorkspaceRegistry::as_ref(ctx);
+    preferred
+        .and_then(|window_id| registry.get(window_id, ctx).map(|ws| (window_id, ws)))
+        .or_else(|| sorted_workspaces(ctx).into_iter().next())
+}
+
+fn open_tab(
+    params: OpenTabParams,
+    ctx: &mut ModelContext<ForkControlHost>,
+) -> Result<OpenTabResult, ErrorBody> {
+    let cwd = PathBuf::from(&params.cwd);
+    if !cwd.is_absolute() || !cwd.is_dir() {
+        return Err(ErrorBody::new(
+            ErrorCode::BadRequest,
+            format!("cwd must be an existing absolute directory: {}", params.cwd),
+        ));
+    }
+    let title = params
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned);
+    let options = NewTerminalOptions {
+        initial_directory: Some(cwd),
+        hide_homepage: true,
+        ..Default::default()
+    };
+
+    let (window_id, pane_group) = match params.window {
+        WindowTarget::New => {
+            let (window_id, _root) = open_new_with_workspace_source(
+                NewWorkspaceSource::Session {
+                    options: Box::new(options),
+                    initial_team_uid: None,
+                },
+                ctx,
+            );
+            let workspace = WorkspaceRegistry::as_ref(ctx)
+                .get(window_id, ctx)
+                .ok_or_else(|| {
+                    ErrorBody::new(ErrorCode::Internal, "new window has no workspace")
+                })?;
+            let pane_group = workspace.as_ref(ctx).active_tab_pane_group().clone();
+            if let Some(title) = &title {
+                pane_group.update(ctx, |group, ctx| group.set_title(title, ctx));
+            }
+            (window_id, pane_group)
+        }
+        WindowTarget::Current => {
+            let (window_id, workspace) = target_window(ctx).ok_or_else(|| {
+                ErrorBody::new(
+                    ErrorCode::Unavailable,
+                    "no Warp window is open; use window \"new\"",
+                )
+            })?;
+            let previous_tab = workspace.as_ref(ctx).active_tab_index();
+            let pane_group = workspace.update(ctx, |workspace, ctx| {
+                workspace.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(options)),
+                    Arc::new(HashMap::new()),
+                    title.clone(),
+                    ctx,
+                );
+                let pane_group = workspace.active_tab_pane_group().clone();
+                if !params.focus {
+                    workspace.activate_tab(previous_tab, ctx);
+                }
+                pane_group
+            });
+            (window_id, pane_group)
+        }
+    };
+
+    let terminal = pane_group
+        .as_ref(ctx)
+        .active_session_view(ctx)
+        .ok_or_else(|| ErrorBody::new(ErrorCode::Internal, "new tab has no terminal"))?;
+    if let Some(command) = params.command.as_deref().filter(|c| !c.trim().is_empty()) {
+        terminal.update(ctx, |terminal, ctx| {
+            terminal.execute_command_or_set_pending(command, ctx)
+        });
+    }
+    if params.focus {
+        ctx.windows().show_window_and_focus_app(window_id);
+    }
+    let shell_pid = terminal
+        .as_ref(ctx)
+        .model
+        .lock()
+        .shell_process_info()
+        .map(|shell| shell.pid);
+    Ok(OpenTabResult {
+        window_id: window_number(window_id),
+        tab_id: entity_number(pane_group.id()),
+        pane_id: entity_number(terminal.id()),
+        shell_pid,
+    })
+}
+
 pub(super) fn handle(
     request: Request,
     procs: Option<ProcessTable>,
@@ -222,6 +334,7 @@ pub(super) fn handle(
         }
         Request::Focus(params) => focus(params.pane_id, ctx).map(|()| json!({})),
         Request::SetTitle(params) => set_title(params, ctx).map(|()| json!({})),
+        Request::OpenTab(params) => open_tab(params, ctx).and_then(to_value),
         _ => Err(ErrorBody::new(ErrorCode::Internal, "not implemented yet")),
     }
 }
