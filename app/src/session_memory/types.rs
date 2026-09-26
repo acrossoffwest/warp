@@ -189,19 +189,24 @@ pub fn is_agent_maintenance_command(source: SessionMemorySource, command: &str) 
         .split_whitespace()
         .skip_while(|token| is_env_assignment(token))
         .nth(1);
-    match (source, subcommand) {
+    matches!(
+        (source, subcommand),
         (
             SessionMemorySource::ClaudeCode,
             Some(
-                "update" | "mcp" | "setup-token" | "doctor" | "config" | "install"
-                | "migrate-installer",
-            ),
-        ) => true,
-        (SessionMemorySource::Codex, Some("login" | "logout" | "mcp" | "completion" | "apply")) => {
-            true
-        }
-        _ => false,
-    }
+                "update"
+                    | "mcp"
+                    | "setup-token"
+                    | "doctor"
+                    | "config"
+                    | "install"
+                    | "migrate-installer"
+            )
+        ) | (
+            SessionMemorySource::Codex,
+            Some("login" | "logout" | "mcp" | "completion" | "apply")
+        )
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

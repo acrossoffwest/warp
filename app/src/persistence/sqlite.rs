@@ -1184,7 +1184,7 @@ fn mark_session_memory_agent_ended(
             SessionMemorySource::WarpTerminal,
         )));
     let updated = diesel::update(running_agent.filter(dsl::started_at.eq(started_at)))
-        .set(ended.clone())
+        .set(ended)
         .execute(conn)?;
     if updated == 0
         && let Some(command) = command
