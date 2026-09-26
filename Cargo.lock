@@ -7027,6 +7027,7 @@ dependencies = [
  "warp-workflows",
  "warp_cli",
  "warp_core",
+ "warp_fork_control",
  "warp_multi_agent_api",
  "warpui",
  "warpui_core",

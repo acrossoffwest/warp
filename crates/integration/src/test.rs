@@ -11,6 +11,7 @@ mod code_review;
 mod copy_current_path;
 mod ctrl_d;
 mod file_tree;
+mod fork_control; // fork_control:
 mod goto_line;
 mod history;
 mod input;
@@ -61,6 +62,7 @@ pub use copy_current_path::*;
 pub use ctrl_d::*;
 pub use file_tree::*;
 use float_cmp::assert_approx_eq;
+pub use fork_control::*; // fork_control:
 pub use goto_line::*;
 pub use history::*;
 pub use input::*;

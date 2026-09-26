@@ -280,6 +280,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Remote control integration tests
     register_test!(test_remote_control_split_and_run);
+    register_test!(test_fork_control_api); // fork_control:
 
     // Remote server integration tests
     register_test!(test_remote_server_connect_bash);
