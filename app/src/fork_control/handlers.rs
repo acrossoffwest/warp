@@ -4,11 +4,15 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use warp_core::channel::ChannelState;
+use warp_fork_control::input::{
+    InputRoute, PASTE_SUBMIT_DELAY, PaneActivity, encode_pty_text, route_input,
+};
 use warp_fork_control::pids::find_pane_for_pid;
 use warp_fork_control::protocol::{
-    API_VERSION, ErrorBody, ErrorCode, ListResult, OpenTabParams, OpenTabResult, PaneInfo,
-    PingResult, Request, SetTitleParams, WindowTarget,
+    API_VERSION, ErrorBody, ErrorCode, InputMode, ListResult, OpenTabParams, OpenTabResult,
+    PaneInfo, PingResult, Request, SendInputParams, SendInputResult, SetTitleParams, WindowTarget,
 };
+use warpui::r#async::Timer;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
@@ -317,6 +321,77 @@ fn open_tab(
     })
 }
 
+fn send_input(
+    params: SendInputParams,
+    ctx: &mut ModelContext<ForkControlHost>,
+) -> Result<SendInputResult, ErrorBody> {
+    let location = find_pane(params.pane_id, ctx)?;
+    let (activity, is_alt_screen, bracketed) = {
+        let terminal = location.terminal.as_ref(ctx);
+        let activity = match terminal.session_command_context(ctx) {
+            CommandContext::RunningCommand { .. } => PaneActivity::RunningCommand,
+            CommandContext::RunningAIBlock { .. } => PaneActivity::WarpAgentRunning,
+            _ => PaneActivity::AtPrompt,
+        };
+        let mut model = terminal.model.lock();
+        (
+            activity,
+            model.is_alt_screen_active(),
+            model.needs_bracketed_paste(),
+        )
+    };
+    let route = route_input(activity, is_alt_screen, params.allow_shell)?;
+
+    match route {
+        InputRoute::Pty => {
+            let bytes = encode_pty_text(&params.text, params.mode, bracketed);
+            let submit_delay = (params.mode == InputMode::Paste && bracketed && !bytes.is_empty())
+                .then_some(PASTE_SUBMIT_DELAY);
+            let submit = params.submit;
+            let delivered = location.terminal.update(ctx, |terminal, ctx| {
+                if !bytes.is_empty() && !terminal.write_user_bytes_to_pty(bytes, ctx) {
+                    return false;
+                }
+                if submit {
+                    match submit_delay {
+                        Some(delay) => {
+                            ctx.spawn(Timer::after(delay), |terminal, _, ctx| {
+                                terminal.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
+                            });
+                        }
+                        None => {
+                            if !terminal.write_user_bytes_to_pty(b"\r".to_vec(), ctx) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                true
+            });
+            if !delivered {
+                return Err(ErrorBody::new(
+                    ErrorCode::PaneBusy,
+                    "a Warp agent controls this pane's input",
+                ));
+            }
+        }
+        InputRoute::InputEditor => {
+            location.terminal.update(ctx, |terminal, ctx| {
+                if params.submit {
+                    terminal.execute_command_or_set_pending(&params.text, ctx);
+                } else {
+                    terminal
+                        .input()
+                        .update(ctx, |input, ctx| input.system_insert(&params.text, ctx));
+                }
+            });
+        }
+    }
+    Ok(SendInputResult {
+        delivered_to: route,
+    })
+}
+
 pub(super) fn handle(
     request: Request,
     procs: Option<ProcessTable>,
@@ -335,7 +410,7 @@ pub(super) fn handle(
         Request::Focus(params) => focus(params.pane_id, ctx).map(|()| json!({})),
         Request::SetTitle(params) => set_title(params, ctx).map(|()| json!({})),
         Request::OpenTab(params) => open_tab(params, ctx).and_then(to_value),
-        _ => Err(ErrorBody::new(ErrorCode::Internal, "not implemented yet")),
+        Request::SendInput(params) => send_input(params, ctx).and_then(to_value),
     }
 }
 
