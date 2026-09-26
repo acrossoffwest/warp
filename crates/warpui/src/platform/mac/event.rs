@@ -90,7 +90,7 @@ pub unsafe fn from_native(
                 // match a "cmd-q" binding even though AppKit menus fire for it.
                 // Mirror the menu behavior by falling back to the physical ANSI
                 // key name whenever cmd is held and the character is not ASCII.
-                let key: String = if cmd && unmodified_chars.chars().any(|c| !c.is_ascii()) {
+                let key: String = if cmd && !unmodified_chars.is_ascii() {
                     ansi_key_name(native_event.keyCode())
                         .map(str::to_owned)
                         .unwrap_or_else(|| unmodified_chars.to_owned())
