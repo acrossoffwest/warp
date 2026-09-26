@@ -397,6 +397,10 @@ impl CLIAgent {
     ///
     /// Callers must ensure `session_id` is a UUID (contains only `[0-9a-f-]`).
     pub fn resume_command(&self, session_id: &str) -> String {
+        if !crate::session_memory::types::is_valid_session_id(session_id) {
+            log::warn!("resume_command called with a non-UUID session id");
+            return String::new();
+        }
         match self {
             CLIAgent::Claude => format!("claude --resume {session_id}"),
             CLIAgent::Codex => format!("codex resume {session_id}"),

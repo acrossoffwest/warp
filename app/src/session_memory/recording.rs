@@ -7,7 +7,7 @@ use chrono::{DateTime, Local};
 use super::restore::is_env_assignment;
 use super::types::{
     AgentPermissionMode, SessionMemoryKind, SessionMemoryRecord, SessionMemorySource,
-    SessionMemoryStatus, terminal_agent_command, user_command,
+    SessionMemoryStatus, is_valid_session_id, terminal_agent_command, user_command,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSession;
@@ -56,8 +56,11 @@ fn claude_session_id(args: &[&str]) -> Option<String> {
 }
 
 fn codex_session_id(args: &[&str]) -> Option<String> {
-    let resume_index = args.iter().position(|arg| *arg == "resume")?;
-    let resume_args = &args[resume_index + 1..];
+    let subcommand_index = args.iter().position(|arg| !arg.starts_with('-'))?;
+    if args[subcommand_index] != "resume" {
+        return None;
+    }
+    let resume_args = &args[subcommand_index + 1..];
     if resume_args.contains(&"--last") {
         return None;
     }
@@ -67,7 +70,7 @@ fn codex_session_id(args: &[&str]) -> Option<String> {
 }
 
 fn session_id_value(value: &str) -> Option<String> {
-    (!value.is_empty() && !value.starts_with('-')).then(|| value.to_owned())
+    is_valid_session_id(value).then(|| value.to_owned())
 }
 
 pub struct PaneRecordInput<'a> {
@@ -143,6 +146,7 @@ pub fn pane_session_memory_record(input: PaneRecordInput<'_>) -> SessionMemoryRe
     record.project = context.and_then(|context| context.project.clone());
     record.native_session_id = context
         .and_then(|context| context.session_id.clone())
+        .filter(|id| is_valid_session_id(id))
         .or_else(|| parse_agent_session_id(&command));
     record.transcript_path = context
         .and_then(|context| context.transcript_path.as_ref())

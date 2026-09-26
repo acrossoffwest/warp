@@ -12,14 +12,19 @@ use super::types::{
 #[test]
 fn codex_restore_uses_saved_cwd_and_dangerous_flag() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let record = dangerous_codex_record(tempdir.path().to_path_buf(), "abc123");
+    let record = dangerous_codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
 
     let plan = agent_restore_plan(&record).expect("restore plan should be built");
 
     assert_eq!(plan.cwd(), Some(tempdir.path()));
     assert_eq!(
         plan.command(),
-        Some("codex resume abc123 --dangerously-bypass-approvals-and-sandbox")
+        Some(
+            "codex resume 019e159b-717d-7663-9a93-95fd9c0790b1 --dangerously-bypass-approvals-and-sandbox"
+        )
     );
     assert_eq!(plan.permission_mode(), Some(AgentPermissionMode::Dangerous));
 }
@@ -27,7 +32,10 @@ fn codex_restore_uses_saved_cwd_and_dangerous_flag() {
 #[test]
 fn claude_restore_uses_saved_session_id_and_dangerous_flag() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "claude-session-123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "11111111-1111-4111-8111-111111111111",
+    );
     record.source = SessionMemorySource::ClaudeCode;
     record.title = "Claude session".to_string();
     record.permission_mode = AgentPermissionMode::Dangerous;
@@ -37,7 +45,7 @@ fn claude_restore_uses_saved_session_id_and_dangerous_flag() {
     assert_eq!(plan.cwd(), Some(tempdir.path()));
     assert_eq!(
         plan.command(),
-        Some("claude --resume claude-session-123 --dangerously-skip-permissions")
+        Some("claude --resume 11111111-1111-4111-8111-111111111111 --dangerously-skip-permissions")
     );
     assert_eq!(plan.permission_mode(), Some(AgentPermissionMode::Dangerous));
 }
@@ -45,7 +53,10 @@ fn claude_restore_uses_saved_session_id_and_dangerous_flag() {
 #[test]
 fn restore_plan_treats_agent_source_with_session_id_as_agent_chat_even_if_kind_is_terminal() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "claude-session-123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "11111111-1111-4111-8111-111111111111",
+    );
     record.source = SessionMemorySource::ClaudeCode;
     record.kind = SessionMemoryKind::Terminal;
     record.last_command = Some("claude --dangerously-skip-permissions".to_string());
@@ -55,7 +66,7 @@ fn restore_plan_treats_agent_source_with_session_id_as_agent_chat_even_if_kind_i
 
     assert_eq!(
         plan.command(),
-        Some("claude --resume claude-session-123 --dangerously-skip-permissions")
+        Some("claude --resume 11111111-1111-4111-8111-111111111111 --dangerously-skip-permissions")
     );
     assert_eq!(plan.permission_mode(), Some(AgentPermissionMode::Dangerous));
     assert_eq!(plan.auto_run(), None);
@@ -64,7 +75,10 @@ fn restore_plan_treats_agent_source_with_session_id_as_agent_chat_even_if_kind_i
 #[test]
 fn startup_restore_routes_agent_chat_to_existing_restored_pane() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "abc123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
     let pane_uuid = vec![1, 2, 3, 4];
     record.terminal_pane_uuid = Some(pane_uuid.clone());
 
@@ -82,7 +96,10 @@ fn startup_restore_routes_agent_chat_to_existing_restored_pane() {
             plan,
         } => {
             assert_eq!(terminal_pane_uuid, pane_uuid);
-            assert_eq!(plan.command(), Some("codex resume abc123"));
+            assert_eq!(
+                plan.command(),
+                Some("codex resume 019e159b-717d-7663-9a93-95fd9c0790b1")
+            );
         }
         other => panic!("expected existing pane action, got {other:?}"),
     }
@@ -140,7 +157,10 @@ fn startup_restore_runs_auto_runnable_terminal_command_in_existing_restored_pane
 #[test]
 fn startup_restore_opens_new_pane_when_layout_did_not_restore_original_pane() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "abc123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
     record.terminal_pane_uuid = Some(vec![1, 2, 3, 4]);
 
     let action = startup_restore_action_for_record(
@@ -156,7 +176,10 @@ fn startup_restore_opens_new_pane_when_layout_did_not_restore_original_pane() {
 
     match action {
         StartupRestoreAction::NewPane { plan } => {
-            assert_eq!(plan.command(), Some("codex resume abc123"));
+            assert_eq!(
+                plan.command(),
+                Some("codex resume 019e159b-717d-7663-9a93-95fd9c0790b1")
+            );
         }
         other => panic!("expected new pane action, got {other:?}"),
     }
@@ -165,7 +188,10 @@ fn startup_restore_opens_new_pane_when_layout_did_not_restore_original_pane() {
 #[test]
 fn startup_restore_routes_agent_chat_to_restored_pane_with_matching_cwd_when_uuid_changed() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "abc123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
     record.terminal_pane_uuid = Some(vec![1, 2, 3, 4]);
     let restored_uuid = vec![9, 9, 9, 9];
 
@@ -183,7 +209,10 @@ fn startup_restore_routes_agent_chat_to_restored_pane_with_matching_cwd_when_uui
             plan,
         } => {
             assert_eq!(terminal_pane_uuid, restored_uuid);
-            assert_eq!(plan.command(), Some("codex resume abc123"));
+            assert_eq!(
+                plan.command(),
+                Some("codex resume 019e159b-717d-7663-9a93-95fd9c0790b1")
+            );
         }
         other => panic!("expected existing pane action, got {other:?}"),
     }
@@ -192,7 +221,10 @@ fn startup_restore_routes_agent_chat_to_restored_pane_with_matching_cwd_when_uui
 #[test]
 fn startup_restore_opens_new_pane_when_no_restored_pane_matches_uuid_or_cwd() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "abc123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
     record.terminal_pane_uuid = Some(vec![1, 2, 3, 4]);
 
     let action = startup_restore_action_for_record(
@@ -208,7 +240,10 @@ fn startup_restore_opens_new_pane_when_no_restored_pane_matches_uuid_or_cwd() {
 
     match action {
         StartupRestoreAction::NewPane { plan } => {
-            assert_eq!(plan.command(), Some("codex resume abc123"));
+            assert_eq!(
+                plan.command(),
+                Some("codex resume 019e159b-717d-7663-9a93-95fd9c0790b1")
+            );
         }
         other => panic!("expected new pane action, got {other:?}"),
     }
@@ -244,7 +279,7 @@ fn restored_pane(uuid: Vec<u8>, cwd: Option<PathBuf>) -> RestoredTerminalPane {
 #[test]
 fn agent_restore_fails_when_cwd_is_missing() {
     let missing_cwd = PathBuf::from("/definitely/not/here/session-memory-board");
-    let record = codex_record(missing_cwd.clone(), "abc123");
+    let record = codex_record(missing_cwd.clone(), "019e159b-717d-7663-9a93-95fd9c0790b1");
 
     let result = agent_restore_plan(&record);
 
@@ -327,7 +362,10 @@ fn terminal_restore_ignores_internal_warp_bootstrap_command() {
 #[test]
 fn normal_and_unknown_agent_permission_do_not_add_dangerous_flags() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut normal_record = codex_record(tempdir.path().to_path_buf(), "abc123");
+    let mut normal_record = codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
     normal_record.permission_mode = AgentPermissionMode::Normal;
     let mut unknown_record = normal_record.clone();
     unknown_record.permission_mode = AgentPermissionMode::Unknown;
@@ -335,14 +373,23 @@ fn normal_and_unknown_agent_permission_do_not_add_dangerous_flags() {
     let normal_plan = agent_restore_plan(&normal_record).expect("normal plan should be built");
     let unknown_plan = agent_restore_plan(&unknown_record).expect("unknown plan should be built");
 
-    assert_eq!(normal_plan.command(), Some("codex resume abc123"));
-    assert_eq!(unknown_plan.command(), Some("codex resume abc123"));
+    assert_eq!(
+        normal_plan.command(),
+        Some("codex resume 019e159b-717d-7663-9a93-95fd9c0790b1")
+    );
+    assert_eq!(
+        unknown_plan.command(),
+        Some("codex resume 019e159b-717d-7663-9a93-95fd9c0790b1")
+    );
 }
 
 #[test]
 fn agent_restore_requires_native_session_id() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "abc123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
     record.native_session_id = None;
 
     let result = agent_restore_plan(&record);
@@ -353,7 +400,10 @@ fn agent_restore_requires_native_session_id() {
 #[test]
 fn unsupported_source_does_not_build_agent_plan() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
-    let mut record = codex_record(tempdir.path().to_path_buf(), "abc123");
+    let mut record = codex_record(
+        tempdir.path().to_path_buf(),
+        "019e159b-717d-7663-9a93-95fd9c0790b1",
+    );
     record.source = SessionMemorySource::WarpTerminal;
 
     let result = agent_restore_plan(&record);

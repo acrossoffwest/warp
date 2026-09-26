@@ -14,27 +14,34 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
 };
 
+const UUID: &str = "019e159b-717d-7663-9a93-95fd9c0790b1";
+const OTHER_UUID: &str = "11111111-1111-4111-8111-111111111111";
+
 #[test]
 fn parse_reads_claude_resume_forms() {
     assert_eq!(
-        parse_agent_session_id("claude --resume abc").as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!("claude --resume {UUID}")).as_deref(),
+        Some(UUID)
     );
     assert_eq!(
-        parse_agent_session_id("claude --resume=abc").as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!("claude --resume={UUID}")).as_deref(),
+        Some(UUID)
     );
     assert_eq!(
-        parse_agent_session_id("claude -r abc").as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!("claude -r {UUID}")).as_deref(),
+        Some(UUID)
     );
     assert_eq!(
-        parse_agent_session_id("claude --dangerously-skip-permissions --resume abc").as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!(
+            "claude --dangerously-skip-permissions --resume {UUID}"
+        ))
+        .as_deref(),
+        Some(UUID)
     );
     assert_eq!(
-        parse_agent_session_id("CLAUDE_CONFIG_DIR=/tmp/x claude --resume abc").as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!("CLAUDE_CONFIG_DIR=/tmp/x claude --resume {UUID}"))
+            .as_deref(),
+        Some(UUID)
     );
 }
 
@@ -56,18 +63,22 @@ fn parse_rejects_flag_or_missing_value_after_resume() {
 #[test]
 fn parse_reads_codex_resume_forms() {
     assert_eq!(
-        parse_agent_session_id("codex resume abc").as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!("codex resume {UUID}")).as_deref(),
+        Some(UUID)
     );
     assert_eq!(
-        parse_agent_session_id("codex resume abc --dangerously-bypass-approvals-and-sandbox")
-            .as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!(
+            "codex resume {UUID} --dangerously-bypass-approvals-and-sandbox"
+        ))
+        .as_deref(),
+        Some(UUID)
     );
     assert_eq!(
-        parse_agent_session_id("codex --dangerously-bypass-approvals-and-sandbox resume abc")
-            .as_deref(),
-        Some("abc")
+        parse_agent_session_id(&format!(
+            "codex --dangerously-bypass-approvals-and-sandbox resume {UUID}"
+        ))
+        .as_deref(),
+        Some(UUID)
     );
     assert_eq!(parse_agent_session_id("codex resume --last"), None);
     assert_eq!(parse_agent_session_id("codex resume"), None);
@@ -76,14 +87,38 @@ fn parse_reads_codex_resume_forms() {
 
 #[test]
 fn parse_ignores_other_programs() {
-    assert_eq!(parse_agent_session_id("vim --resume abc"), None);
+    assert_eq!(
+        parse_agent_session_id(&format!("vim --resume {UUID}")),
+        None
+    );
     assert_eq!(parse_agent_session_id(""), None);
+}
+
+#[test]
+fn parse_rejects_non_uuid_session_ids() {
+    assert_eq!(parse_agent_session_id("claude --resume abc;rm"), None);
+    assert_eq!(parse_agent_session_id("claude --resume $(x)"), None);
+    assert_eq!(parse_agent_session_id("claude --resume flag\""), None);
+    assert_eq!(parse_agent_session_id("claude --resume abc"), None);
+    assert_eq!(parse_agent_session_id("codex resume abc;rm"), None);
+    assert_eq!(parse_agent_session_id("codex resume abc"), None);
+    assert_eq!(parse_agent_session_id("claude -p \"please -r this\""), None);
+}
+
+#[test]
+fn parse_requires_resume_in_codex_subcommand_position() {
+    assert_eq!(
+        parse_agent_session_id(&format!("codex exec \"fix and resume {UUID}\"")),
+        None
+    );
 }
 
 #[test]
 fn running_claude_without_plugin_records_agent_with_parsed_id() {
     let record = pane_session_memory_record(input(
-        Some("claude --resume abc --dangerously-skip-permissions"),
+        Some(&format!(
+            "claude --resume {UUID} --dangerously-skip-permissions"
+        )),
         Some(1_000),
         None,
         None,
@@ -93,7 +128,7 @@ fn running_claude_without_plugin_records_agent_with_parsed_id() {
     assert_eq!(record.source, SessionMemorySource::ClaudeCode);
     assert_eq!(record.kind, SessionMemoryKind::AgentChat);
     assert_eq!(record.status, SessionMemoryStatus::Live);
-    assert_eq!(record.native_session_id.as_deref(), Some("abc"));
+    assert_eq!(record.native_session_id.as_deref(), Some(UUID));
     assert_eq!(record.permission_mode, AgentPermissionMode::Dangerous);
     assert_eq!(record.started_at, Some(1_000));
     assert_eq!(record.completed_at, None);
@@ -102,7 +137,7 @@ fn running_claude_without_plugin_records_agent_with_parsed_id() {
         Some(vec![
             "claude".to_string(),
             "--resume".to_string(),
-            "abc".to_string(),
+            UUID.to_string(),
             "--dangerously-skip-permissions".to_string(),
         ])
     );
@@ -136,17 +171,29 @@ fn plugin_session_id_wins_over_command_id() {
     let session = plugin_session(
         CLIAgent::Claude,
         CLIAgentSessionStatus::InProgress,
-        Some("plugin-id"),
+        Some(OTHER_UUID),
     );
     let record = pane_session_memory_record(input(
-        Some("claude --resume command-id"),
+        Some(&format!("claude --resume {UUID}")),
         Some(10),
         None,
         Some(&session),
     ));
 
-    assert_eq!(record.native_session_id.as_deref(), Some("plugin-id"));
+    assert_eq!(record.native_session_id.as_deref(), Some(OTHER_UUID));
     assert_eq!(record.cwd, Some(PathBuf::from("/tmp/plugin-cwd")));
+}
+
+#[test]
+fn plugin_session_with_invalid_id_falls_back_to_none() {
+    let session = plugin_session(
+        CLIAgent::Claude,
+        CLIAgentSessionStatus::InProgress,
+        Some("plugin-id"),
+    );
+    let record = pane_session_memory_record(input(Some("claude"), Some(10), None, Some(&session)));
+
+    assert_eq!(record.native_session_id, None);
 }
 
 #[test]
@@ -162,22 +209,15 @@ fn plugin_session_with_alias_command_records_agent() {
 
 #[test]
 fn restored_agent_block_without_running_command_records_terminal() {
-    let record = pane_session_memory_record(input(
-        None,
-        None,
-        Some("claude --resume abc --dangerously-skip-permissions"),
-        None,
-    ));
+    let last_command = format!("claude --resume {UUID} --dangerously-skip-permissions");
+    let record = pane_session_memory_record(input(None, None, Some(&last_command), None));
 
     assert_eq!(record.source, SessionMemorySource::WarpTerminal);
     assert_eq!(record.kind, SessionMemoryKind::Terminal);
     assert_eq!(record.native_session_id, None);
     assert_eq!(record.permission_mode, AgentPermissionMode::Unknown);
     assert_eq!(record.started_at, None);
-    assert_eq!(
-        record.last_command.as_deref(),
-        Some("claude --resume abc --dangerously-skip-permissions")
-    );
+    assert_eq!(record.last_command.as_deref(), Some(last_command.as_str()));
 }
 
 #[test]

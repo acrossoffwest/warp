@@ -21,6 +21,19 @@ pub fn user_command(command: Option<&str>) -> Option<String> {
     Some(command.to_owned())
 }
 
+pub(crate) fn is_valid_session_id(id: &str) -> bool {
+    const DASH_POSITIONS: [usize; 4] = [8, 13, 18, 23];
+    let bytes = id.as_bytes();
+    bytes.len() == 36
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, &byte)| match DASH_POSITIONS.contains(&index) {
+                true => byte == b'-',
+                false => byte.is_ascii_hexdigit(),
+            })
+}
+
 pub fn command_preview(command: Option<&str>) -> Option<String> {
     let command = user_command(command)?;
     let first_line = command.lines().next().unwrap_or_default().trim();
