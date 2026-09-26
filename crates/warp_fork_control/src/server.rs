@@ -1,12 +1,14 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::net::Shutdown;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -20,9 +22,16 @@ pub type Handler = Arc<dyn Fn(Request) -> Result<Value, ErrorBody> + Send + Sync
 /// `sun_path` is 104 bytes on macOS (108 on Linux), including the NUL.
 const MAX_SOCKET_PATH_LEN: usize = 103;
 
+const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+type Connections = Arc<Mutex<Vec<UnixStream>>>;
+
 pub struct Server {
     path: PathBuf,
+    dev: u64,
+    ino: u64,
     stop: Arc<AtomicBool>,
+    connections: Connections,
     accept_thread: Option<JoinHandle<()>>,
 }
 
@@ -39,28 +48,48 @@ impl Server {
                 .create(dir)
                 .with_context(|| format!("creating {}", dir.display()))?;
         }
-        if path.exists() {
-            if UnixStream::connect(path).is_ok() {
-                bail!("another process is already serving {}", path.display());
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_socket() {
+                    bail!("refusing to remove non-socket file at {}", path.display());
+                }
+                if UnixStream::connect(path).is_ok() {
+                    bail!("another process is already serving {}", path.display());
+                }
+                std::fs::remove_file(path)
+                    .with_context(|| format!("removing stale socket {}", path.display()))?;
             }
-            std::fs::remove_file(path)
-                .with_context(|| format!("removing stale socket {}", path.display()))?;
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspecting {}", path.display()));
+            }
         }
         let listener =
             UnixListener::bind(path).with_context(|| format!("binding {}", path.display()))?;
+        listener
+            .set_nonblocking(true)
+            .with_context(|| format!("setting {} non-blocking", path.display()))?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("chmod 0600 {}", path.display()))?;
+        let metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("inspecting {}", path.display()))?;
+        let (dev, ino) = (metadata.dev(), metadata.ino());
 
         let stop = Arc::new(AtomicBool::new(false));
+        let connections: Connections = Arc::new(Mutex::new(Vec::new()));
         let thread_stop = stop.clone();
+        let thread_connections = connections.clone();
         let accept_thread = std::thread::Builder::new()
             .name("fork-control-accept".into())
-            .spawn(move || accept_loop(listener, handler, thread_stop))
+            .spawn(move || accept_loop(listener, handler, thread_stop, thread_connections))
             .context("spawning accept thread")?;
 
         Ok(Server {
             path: path.to_owned(),
+            dev,
+            ino,
             stop,
+            connections,
             accept_thread: Some(accept_thread),
         })
     }
@@ -73,35 +102,74 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        let _ = UnixStream::connect(&self.path);
+        if let Ok(connections) = self.connections.lock() {
+            for stream in connections.iter() {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        }
         if let Some(thread) = self.accept_thread.take() {
             let _ = thread.join();
         }
-        let _ = std::fs::remove_file(&self.path);
+        if let Ok(metadata) = std::fs::symlink_metadata(&self.path)
+            && metadata.dev() == self.dev
+            && metadata.ino() == self.ino
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
-fn accept_loop(listener: UnixListener, handler: Handler, stop: Arc<AtomicBool>) {
-    for stream in listener.incoming() {
+fn accept_loop(
+    listener: UnixListener,
+    handler: Handler,
+    stop: Arc<AtomicBool>,
+    connections: Connections,
+) {
+    loop {
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        let Ok(stream) = stream else { continue };
-        if !peer_is_same_user(&stream) {
-            log::warn!("fork_control: rejected a connection from another user");
-            continue;
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                if let Err(error) = stream.set_nonblocking(false) {
+                    log::warn!("fork_control: failed to set connection blocking: {error}");
+                    continue;
+                }
+                if !peer_is_same_user(&stream) {
+                    log::warn!("fork_control: rejected a connection from another user");
+                    continue;
+                }
+                let Ok(registered) = stream.try_clone() else { continue };
+                if let Ok(mut connections) = connections.lock() {
+                    connections.push(registered);
+                }
+                let handler = handler.clone();
+                let conn_stop = stop.clone();
+                if let Err(error) = std::thread::Builder::new()
+                    .name("fork-control-conn".into())
+                    .spawn(move || serve_connection(stream, handler, conn_stop))
+                {
+                    log::warn!("fork_control: failed to spawn connection thread: {error}");
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(ACCEPT_POLL_INTERVAL);
+            }
+            Err(error) => {
+                log::warn!("fork_control: accept failed: {error}");
+                std::thread::sleep(ACCEPT_POLL_INTERVAL);
+            }
         }
-        let handler = handler.clone();
-        let _ = std::thread::Builder::new()
-            .name("fork-control-conn".into())
-            .spawn(move || serve_connection(stream, handler));
     }
 }
 
-fn serve_connection(stream: UnixStream, handler: Handler) {
+fn serve_connection(stream: UnixStream, handler: Handler, stop: Arc<AtomicBool>) {
     let Ok(read_half) = stream.try_clone() else { return };
     let mut writer = stream;
     for line in BufReader::new(read_half).lines() {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;

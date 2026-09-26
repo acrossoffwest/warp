@@ -1,7 +1,8 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -105,4 +106,49 @@ fn does_not_chmod_existing_parent_dir() {
     let _server = Server::start(&path, echo_handler()).unwrap();
     let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o755);
+}
+
+#[test]
+fn drop_does_not_hang_or_delete_replacement_socket() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = socket_in(&dir);
+    let server = Server::start(&path, echo_handler()).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let replacement = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(server);
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(Duration::from_secs(2)).expect("Server::drop hung");
+
+    assert!(path.exists());
+    drop(replacement);
+}
+
+#[test]
+fn drop_closes_live_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(&socket_in(&dir), echo_handler()).unwrap();
+    let mut stream = UnixStream::connect(server.path()).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    roundtrip(&mut stream, r#"{"method":"ping"}"#);
+
+    drop(server);
+
+    let mut buf = [0u8; 1];
+    let n = stream.read(&mut buf).unwrap();
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn refuses_to_remove_non_socket_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = socket_in(&dir);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"not a socket").unwrap();
+
+    assert!(Server::start(&path, echo_handler()).is_err());
+    assert!(path.exists());
 }
