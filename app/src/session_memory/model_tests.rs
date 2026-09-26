@@ -475,6 +475,39 @@ fn run_bounds_come_from_run_state() {
     );
 }
 
+#[test]
+fn agents_that_ended_before_previous_run_started_do_not_claim_files() {
+    let mut stale = agent_record("stale-agent", "previous-run");
+    stale.native_session_id = Some("stale-id".to_string());
+    stale.completed_at = Some(90);
+    let mut stale_closed = agent_record("stale-closed", "previous-run");
+    stale_closed.closed_intentionally_at = Some(90);
+    let mut recent = agent_record("recent-agent", "previous-run");
+    recent.native_session_id = Some("recent-id".to_string());
+    recent.completed_at = Some(150);
+    let model = SessionMemoryModel::new_with_run_state(
+        vec![stale, stale_closed, recent],
+        None,
+        SessionMemoryRunState::with_previous_run(
+            "current-run",
+            Some("previous-run".to_string()),
+            None,
+        )
+        .with_run_starts(500, Some(100)),
+    );
+
+    let ended = model
+        .previous_run_ended_agent_records()
+        .into_iter()
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    let ids = model.previous_run_native_session_ids();
+
+    assert_eq!(ended, vec!["recent-agent"]);
+    assert!(ids.contains("recent-id"));
+    assert!(!ids.contains("stale-id"));
+}
+
 fn agent_record(id: &str, app_run_id: &str) -> SessionMemoryRecord {
     let mut record = test_record(id);
     record.source = SessionMemorySource::ClaudeCode;

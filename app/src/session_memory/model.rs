@@ -176,9 +176,18 @@ impl SessionMemoryModel {
                 record.is_agent()
                     && record.app_run_id.as_deref() == Some(previous_run_id)
                     && (record.completed_at.is_some() || record.closed_intentionally_at.is_some())
+                    && !self.ended_before_previous_run(record)
             })
             .cloned()
             .collect()
+    }
+
+    fn ended_before_previous_run(&self, record: &SessionMemoryRecord) -> bool {
+        let ended_at = record.completed_at.or(record.closed_intentionally_at);
+        matches!(
+            (ended_at, self.run_state.previous_run_started_at),
+            (Some(ended_at), Some(previous_run_started_at)) if ended_at < previous_run_started_at
+        )
     }
 
     pub fn run_bounds(&self) -> RunBounds {
@@ -194,7 +203,10 @@ impl SessionMemoryModel {
         };
         self.records
             .iter()
-            .filter(|record| record.app_run_id.as_deref() == Some(previous_run_id))
+            .filter(|record| {
+                record.app_run_id.as_deref() == Some(previous_run_id)
+                    && !self.ended_before_previous_run(record)
+            })
             .filter_map(|record| record.native_session_id.clone())
             .collect()
     }
